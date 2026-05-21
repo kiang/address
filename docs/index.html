@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>掃街地圖</title>
+    <meta name="description" content="各縣市行政區門牌掃街路線規劃，將門牌座標以最短路徑串連，每段約一小時自行車可完成的距離">
+    <meta name="keywords" content="掃街,門牌,路線規劃,自行車,地圖">
+    <meta property="og:title" content="掃街地圖">
+    <meta property="og:description" content="各縣市行政區門牌掃街路線，每段路線約15公里，騎自行車約一小時可完成">
+    <meta property="og:type" content="website">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+        #map { position: absolute; top: 0; left: 0; right: 0; bottom: 0; z-index: 0; }
+        #panel {
+            position: absolute; top: 10px; left: 10px; z-index: 1000;
+            background: white; border-radius: 8px; box-shadow: 0 2px 12px rgba(0,0,0,0.25);
+            width: 280px; max-height: calc(100vh - 20px); display: flex; flex-direction: column;
+            overflow: hidden;
+        }
+        #panel-header {
+            padding: 12px 14px; border-bottom: 1px solid #e0e0e0;
+            font-size: 15px; font-weight: 600; cursor: pointer;
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        #panel-header:hover { background: #f5f5f5; }
+        #panel-toggle { font-size: 12px; color: #888; }
+        #panel-body { overflow-y: auto; flex: 1; }
+        .city-group-header {
+            padding: 8px 14px; background: #f0f0f0; font-size: 14px; font-weight: 600;
+            cursor: pointer; display: flex; justify-content: space-between; align-items: center;
+            border-bottom: 1px solid #e0e0e0; position: sticky; top: 0; z-index: 1;
+        }
+        .city-group-header:hover { background: #e5e5e5; }
+        .city-group-header .toggle { font-size: 10px; color: #888; }
+        .city-group-header.active { background: #d0e0f0; }
+        .district-item {
+            padding: 8px 14px 8px 28px; cursor: pointer; border-bottom: 1px solid #f0f0f0;
+            display: flex; justify-content: space-between; align-items: center;
+            font-size: 13px;
+        }
+        .district-item:hover { background: #f0f7ff; }
+        .district-item.active { background: #e3f0ff; font-weight: 600; }
+        .district-item .meta { color: #888; font-size: 11px; }
+        .city-districts { display: none; }
+        .city-districts.open { display: block; }
+        #segment-nav {
+            position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
+            z-index: 1000; background: white; border-radius: 8px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.25); padding: 10px 16px;
+            display: none; align-items: center; gap: 12px; font-size: 14px;
+        }
+        #segment-nav button {
+            border: none; background: #4a90d9; color: white; border-radius: 4px;
+            padding: 6px 14px; cursor: pointer; font-size: 13px;
+        }
+        #segment-nav button:hover { background: #3a7bc8; }
+        #segment-nav button:disabled { background: #ccc; cursor: default; }
+        #segment-info { min-width: 120px; text-align: center; }
+        .collapsed #panel-body, .collapsed #panel-search { display: none; }
+        #panel-search {
+            padding: 8px 10px; border-bottom: 1px solid #e0e0e0;
+        }
+        #search-input {
+            width: 100%; padding: 6px 10px; border: 1px solid #ddd;
+            border-radius: 4px; font-size: 13px; outline: none;
+        }
+        #search-input:focus { border-color: #4a90d9; }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    <div id="panel">
+        <div id="panel-header">
+            <span>掃街地圖</span>
+            <span id="panel-toggle">&#x25BC;</span>
+        </div>
+        <div id="panel-search">
+            <input type="text" id="search-input" placeholder="搜尋縣市或區域..." />
+        </div>
+        <div id="panel-body"></div>
+    </div>
+    <div id="segment-nav">
+        <button id="btn-prev">&#x25C0; 上一段</button>
+        <div id="segment-info"></div>
+        <button id="btn-next">下一段 &#x25B6;</button>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        L.polylineDecorator = function(paths, options) { return new L.PolylineDecorator(paths, options); };
+        L.PolylineDecorator = L.FeatureGroup.extend({
+            options: { patterns: [] },
+            initialize: function(paths, options) {
+                L.FeatureGroup.prototype.initialize.call(this);
+                L.setOptions(this, options);
+                this._paths = paths;
+            },
+            onAdd: function(map) {
+                this._map = map;
+                this._draw();
+                map.on('zoomend', this._draw, this);
+            },
+            onRemove: function(map) {
+                this.clearLayers();
+                map.off('zoomend', this._draw, this);
+            },
+            _draw: function() {
+                this.clearLayers();
+                var latlngs = this._paths instanceof L.Polyline ? this._paths.getLatLngs() : this._paths;
+                if (!latlngs || latlngs.length < 2) return;
+                this.options.patterns.forEach(function(pattern) {
+                    this._drawPattern(latlngs, pattern);
+                }, this);
+            },
+            _drawPattern: function(latlngs, pattern) {
+                var offset = pattern.offset || '50%';
+                var repeat = pattern.repeat || 100;
+                var symbol = pattern.symbol;
+                if (!symbol) return;
+                var totalDist = 0;
+                var segDists = [];
+                for (var i = 1; i < latlngs.length; i++) {
+                    var d = this._map.latLngToLayerPoint(latlngs[i]).distanceTo(
+                        this._map.latLngToLayerPoint(latlngs[i-1]));
+                    segDists.push(d);
+                    totalDist += d;
+                }
+                var repeatPx = typeof repeat === 'string' && repeat.endsWith('%')
+                    ? totalDist * parseFloat(repeat) / 100 : repeat;
+                if (repeatPx < 1) repeatPx = 1;
+                var startOffset = typeof offset === 'string' && offset.endsWith('%')
+                    ? totalDist * parseFloat(offset) / 100 : offset;
+                for (var dist = startOffset; dist < totalDist; dist += repeatPx) {
+                    var pos = this._getPointAtDistance(latlngs, segDists, dist);
+                    if (pos) {
+                        var marker = symbol.buildSymbol(pos.pt, pos.angle, this._map);
+                        if (marker) this.addLayer(marker);
+                    }
+                }
+            },
+            _getPointAtDistance: function(latlngs, segDists, targetDist) {
+                var accum = 0;
+                for (var i = 0; i < segDists.length; i++) {
+                    if (accum + segDists[i] >= targetDist) {
+                        var ratio = (targetDist - accum) / segDists[i];
+                        var p1 = this._map.latLngToLayerPoint(latlngs[i]);
+                        var p2 = this._map.latLngToLayerPoint(latlngs[i+1]);
+                        var pt = L.point(p1.x + (p2.x - p1.x) * ratio, p1.y + (p2.y - p1.y) * ratio);
+                        var angle = Math.atan2(p2.y - p1.y, p2.x - p1.x);
+                        return { pt: this._map.layerPointToLatLng(pt), angle: angle };
+                    }
+                    accum += segDists[i];
+                }
+                return null;
+            }
+        });
+
+        L.Symbol = L.Symbol || {};
+        L.Symbol.arrowHead = function(options) { return new L.Symbol.ArrowHead(options); };
+        L.Symbol.ArrowHead = L.Class.extend({
+            options: { pixelSize: 14, headAngle: 50, pathOptions: {} },
+            initialize: function(options) { L.setOptions(this, options); },
+            buildSymbol: function(latlng, angle, map) {
+                var s = this.options.pixelSize;
+                var ha = this.options.headAngle * Math.PI / 180 / 2;
+                var center = map.latLngToLayerPoint(latlng);
+                var tip = L.point(center.x + s * 0.4 * Math.cos(angle), center.y + s * 0.4 * Math.sin(angle));
+                var p1 = L.point(center.x - s * Math.cos(angle - ha), center.y - s * Math.sin(angle - ha));
+                var p2 = L.point(center.x - s * Math.cos(angle + ha), center.y - s * Math.sin(angle + ha));
+                return L.polygon([
+                    map.layerPointToLatLng(tip),
+                    map.layerPointToLatLng(p1),
+                    map.layerPointToLatLng(p2)
+                ], L.extend({ stroke: true, weight: 1, fill: true, fillOpacity: 0.85 }, this.options.pathOptions));
+            }
+        });
+    </script>
+    <script>
+        const cityNames = {"changhua":"彰化縣","chiayi_county":"嘉義縣","hsinchu_city":"新竹市","hsinchu_county":"新竹縣","hualien":"花蓮縣","kaohsiung":"高雄市","kinmen":"金門縣","miaoli":"苗栗縣","new_taipei":"新北市","penghu":"澎湖縣","pingtung":"屏東縣","taichung":"臺中市","tainan":"臺南市","taipei":"臺北市","taitung":"臺東縣","taoyuan":"桃園市","yunlin":"雲林縣"};
+
+        const cityDistricts = {"changhua":["10007010","10007020","10007030","10007040","10007050","10007060","10007070","10007080","10007090","10007100","10007110","10007120","10007130","10007140","10007150","10007160","10007170","10007180","10007190","10007200","10007210","10007220","10007230","10007240","10007250","10007260"],"chiayi_county":["1001001","1001002","1001003","1001004","1001005","1001006","1001007","1001008","1001009","1001010","1001011","1001012","1001013","1001014","1001015","1001016","1001017","1001018"],"hsinchu_city":["1001801","1001802","1001803"],"hsinchu_county":["1000401","1000402","1000403","1000404","1000405","1000406","1000407","1000408","1000409","1000410","1000411","1000412","1000413"],"hualien":["1001501","1001502","1001503","1001504","1001505","1001506","1001507","1001508","1001509","1001510","1001511","1001512","1001513"],"kaohsiung":["6400100","6400200","6400300","6400400","6400500","6400600","6400700","6400800","6400900","6401000","6401100","6401200","6401300","6401400","6401500","6401600","6401700","6401800","6401900","6402000","6402100","6402200","6402300","6402400","6402500","6402600","6402700","6402800","6402900","6403000","6403100","6403200","6403300","6403400","6403500","6403600","6403700","6403800"],"kinmen":["902001","902002","902003","902004","902005","902006"],"miaoli":["1000501","1000502","1000503","1000504","1000505","1000506","1000507","1000508","1000509","1000510","1000511","1000512","1000513","1000514","1000515","1000516","1000517","1000518"],"new_taipei":["65000010","65000020","65000030","65000040","65000050","65000060","65000070","65000080","65000090","65000100","65000110","65000120","65000130","65000140","65000150","65000160","65000170","65000180","65000190","65000200","65000210","65000220","65000230","65000240","65000250","65000260","65000270","65000280","65000290"],"penghu":["1001601","1001602","1001603","1001604","1001605","1001606"],"pingtung":["1001301","1001302","1001303","1001304","1001305","1001306","1001307","1001308","1001309","1001310","1001311","1001312","1001313","1001314","1001315","1001316","1001317","1001318","1001319","1001320","1001321","1001322","1001323","1001324","1001325","1001326","1001327","1001328","1001329","1001330","1001331","1001332","1001333"],"taichung":["6600100","6600200","6600300","6600400","6600500","6600600","6600700","6600800","6600900","6601000","6601100","6601200","6601300","6601400","6601500","6601600","6601700","6601800","6601900","6602000","6602100","6602200","6602300","6602400","6602500","6602600","6602700","6602800","6602900"],"tainan":["6700100","6700200","6700300","6700400","6700500","6700600","6700700","6700800","6700900","6701000","6701100","6701200","6701300","6701400","6701500","6701600","6701700","6701800","6701900","6702000","6702100","6702200","6702300","6702400","6702500","6702600","6702700","6702800","6702900","6703000","6703100","6703200","6703300","6703400","6703500","6703600","6703700"],"taipei":["63000010","63000020","63000030","63000040","63000050","63000060","63000070","63000080","63000090","63000100","63000110","63000120"],"taitung":["1001401","1001402","1001403","1001404","1001405","1001406","1001407","1001408","1001409","1001410","1001411","1001412","1001413","1001414","1001415","1001416"],"taoyuan":["6800100","6800200","6800300","6800400","6800500","6800600","6800700","6800800","6800900","6801000","6801100","6801200","6801300"],"yunlin":["1000901","1000902","1000903","1000904","1000905","1000906","1000907","1000908","1000909","1000910","1000911","1000912","1000913","1000914","1000915","1000916","1000917","1000918","1000919","1000920"]};
+
+        const districtNames = {"10007010":"彰化市","10007020":"鹿港鎮","10007030":"和美鎮","10007040":"線西鄉","10007050":"伸港鄉","10007060":"福興鄉","10007070":"秀水鄉","10007080":"花壇鄉","10007090":"芬園鄉","10007100":"員林市","10007110":"溪湖鎮","10007120":"田中鎮","10007130":"大村鄉","10007140":"埔鹽鄉","10007150":"埔心鄉","10007160":"永靖鄉","10007170":"社頭鄉","10007180":"二水鄉","10007190":"北斗鎮","10007200":"二林鎮","10007210":"田尾鄉","10007220":"埤頭鄉","10007230":"芳苑鄉","10007240":"大城鄉","10007250":"竹塘鄉","10007260":"溪州鄉","1001001":"太保市","1001002":"朴子市","1001003":"布袋鎮","1001004":"大林鎮","1001005":"民雄鄉","1001006":"溪口鄉","1001007":"新港鄉","1001008":"六腳鄉","1001009":"東石鄉","1001010":"義竹鄉","1001011":"鹿草鄉","1001012":"水上鄉","1001013":"中埔鄉","1001014":"竹崎鄉","1001015":"梅山鄉","1001016":"番路鄉","1001017":"大埔鄉","1001018":"阿里山鄉","1001801":"東區","1001802":"北區","1001803":"香山區","1000401":"竹北市","1000402":"竹東鎮","1000403":"新埔鎮","1000404":"關西鎮","1000405":"湖口鄉","1000406":"新豐鄉","1000407":"芎林鄉","1000408":"橫山鄉","1000409":"北埔鄉","1000410":"寶山鄉","1000411":"峨眉鄉","1000412":"尖石鄉","1000413":"五峰鄉","1001501":"花蓮市","1001502":"鳳林鎮","1001503":"玉里鎮","1001504":"新城鄉","1001505":"吉安鄉","1001506":"壽豐鄉","1001507":"光復鄉","1001508":"豐濱鄉","1001509":"瑞穗鄉","1001510":"富里鄉","1001511":"秀林鄉","1001512":"萬榮鄉","1001513":"卓溪鄉","6400100":"鹽埕區","6400200":"鼓山區","6400300":"左營區","6400400":"楠梓區","6400500":"三民區","6400600":"新興區","6400700":"前金區","6400800":"苓雅區","6400900":"前鎮區","6401000":"旗津區","6401100":"小港區","6401200":"鳳山區","6401300":"林園區","6401400":"大寮區","6401500":"大樹區","6401600":"大社區","6401700":"仁武區","6401800":"鳥松區","6401900":"岡山區","6402000":"橋頭區","6402100":"燕巢區","6402200":"田寮區","6402300":"阿蓮區","6402400":"路竹區","6402500":"湖內區","6402600":"茄萣區","6402700":"永安區","6402800":"彌陀區","6402900":"梓官區","6403000":"旗山區","6403100":"美濃區","6403200":"六龜區","6403300":"甲仙區","6403400":"杉林區","6403500":"內門區","6403600":"茂林區","6403700":"桃源區","6403800":"那瑪夏區","902001":"金城鎮","902002":"金沙鎮","902003":"金湖鎮","902004":"金寧鄉","902005":"烈嶼鄉","902006":"烏坵鄉","1000501":"苗栗市","1000502":"苑裡鎮","1000503":"通霄鎮","1000504":"竹南鎮","1000505":"頭份市","1000506":"後龍鎮","1000507":"卓蘭鎮","1000508":"大湖鄉","1000509":"公館鄉","1000510":"銅鑼鄉","1000511":"南庄鄉","1000512":"頭屋鄉","1000513":"三義鄉","1000514":"西湖鄉","1000515":"造橋鄉","1000516":"三灣鄉","1000517":"獅潭鄉","1000518":"泰安鄉","65000010":"板橋區","65000020":"三重區","65000030":"中和區","65000040":"永和區","65000050":"新莊區","65000060":"新店區","65000070":"樹林區","65000080":"鶯歌區","65000090":"三峽區","65000100":"淡水區","65000110":"汐止區","65000120":"瑞芳區","65000130":"土城區","65000140":"蘆洲區","65000150":"五股區","65000160":"泰山區","65000170":"林口區","65000180":"深坑區","65000190":"石碇區","65000200":"坪林區","65000210":"三芝區","65000220":"石門區","65000230":"八里區","65000240":"平溪區","65000250":"雙溪區","65000260":"貢寮區","65000270":"金山區","65000280":"萬里區","65000290":"烏來區","1001601":"馬公市","1001602":"湖西鄉","1001603":"白沙鄉","1001604":"西嶼鄉","1001605":"望安鄉","1001606":"七美鄉","1001301":"屏東市","1001302":"潮州鎮","1001303":"東港鎮","1001304":"恆春鎮","1001305":"萬丹鄉","1001306":"長治鄉","1001307":"麟洛鄉","1001308":"九如鄉","1001309":"里港鄉","1001310":"鹽埔鄉","1001311":"高樹鄉","1001312":"萬巒鄉","1001313":"內埔鄉","1001314":"竹田鄉","1001315":"新埤鄉","1001316":"枋寮鄉","1001317":"新園鄉","1001318":"崁頂鄉","1001319":"林邊鄉","1001320":"南州鄉","1001321":"佳冬鄉","1001322":"琉球鄉","1001323":"車城鄉","1001324":"滿州鄉","1001325":"枋山鄉","1001326":"三地門鄉","1001327":"霧臺鄉","1001328":"瑪家鄉","1001329":"泰武鄉","1001330":"來義鄉","1001331":"春日鄉","1001332":"獅子鄉","1001333":"牡丹鄉","6600100":"中區","6600200":"東區","6600300":"南區","6600400":"西區","6600500":"北區","6600600":"西屯區","6600700":"南屯區","6600800":"北屯區","6600900":"豐原區","6601000":"東勢區","6601100":"大甲區","6601200":"清水區","6601300":"沙鹿區","6601400":"梧棲區","6601500":"后里區","6601600":"神岡區","6601700":"潭子區","6601800":"大雅區","6601900":"新社區","6602000":"石岡區","6602100":"外埔區","6602200":"大安區","6602300":"烏日區","6602400":"大肚區","6602500":"龍井區","6602600":"霧峰區","6602700":"太平區","6602800":"大里區","6602900":"和平區","6700100":"新營區","6700200":"鹽水區","6700300":"白河區","6700400":"柳營區","6700500":"後壁區","6700600":"東山區","6700700":"麻豆區","6700800":"下營區","6700900":"六甲區","6701000":"官田區","6701100":"大內區","6701200":"佳里區","6701300":"學甲區","6701400":"西港區","6701500":"七股區","6701600":"將軍區","6701700":"北門區","6701800":"新化區","6701900":"善化區","6702000":"新市區","6702100":"安定區","6702200":"山上區","6702300":"玉井區","6702400":"楠西區","6702500":"南化區","6702600":"左鎮區","6702700":"仁德區","6702800":"歸仁區","6702900":"關廟區","6703000":"龍崎區","6703100":"永康區","6703200":"東區","6703300":"南區","6703400":"北區","6703500":"安南區","6703600":"安平區","6703700":"中西區","63000010":"松山區","63000020":"信義區","63000030":"大安區","63000040":"中山區","63000050":"中正區","63000060":"大同區","63000070":"萬華區","63000080":"文山區","63000090":"南港區","63000100":"內湖區","63000110":"士林區","63000120":"北投區","1001401":"臺東市","1001402":"成功鎮","1001403":"關山鎮","1001404":"卑南鄉","1001405":"鹿野鄉","1001406":"池上鄉","1001407":"東河鄉","1001408":"長濱鄉","1001409":"太麻里鄉","1001410":"大武鄉","1001411":"綠島鄉","1001412":"海端鄉","1001413":"延平鄉","1001414":"金峰鄉","1001415":"達仁鄉","1001416":"蘭嶼鄉","6800100":"桃園區","6800200":"中壢區","6800300":"大溪區","6800400":"楊梅區","6800500":"蘆竹區","6800600":"大園區","6800700":"龜山區","6800800":"八德區","6800900":"龍潭區","6801000":"平鎮區","6801100":"新屋區","6801200":"觀音區","6801300":"復興區","1000901":"斗六市","1000902":"斗南鎮","1000903":"虎尾鎮","1000904":"西螺鎮","1000905":"土庫鎮","1000906":"北港鎮","1000907":"古坑鄉","1000908":"大埤鄉","1000909":"莿桐鄉","1000910":"林內鄉","1000911":"二崙鄉","1000912":"崙背鄉","1000913":"麥寮鄉","1000914":"東勢鄉","1000915":"褒忠鄉","1000916":"臺西鄉","1000917":"元長鄉","1000918":"四湖鄉","1000919":"口湖鄉","1000920":"水林鄉"};
+
+        const cityOrder = ["taipei","new_taipei","taoyuan","hsinchu_city","hsinchu_county","miaoli","taichung","changhua","yunlin","chiayi_county","tainan","kaohsiung","pingtung","taitung","hualien","penghu","kinmen"];
+
+        const map = L.map('map').setView([23.7, 120.9], 8);
+        L.tileLayer('https://wmts.nlsc.gov.tw/wmts/EMAP/default/GoogleMapsCompatible/{z}/{y}/{x}', {
+            attribution: '&copy; 內政部國土測繪中心',
+            maxZoom: 20
+        }).addTo(map);
+
+        let currentData = null;
+        let currentSegment = 0;
+        let currentCity = null;
+        let currentCode = null;
+        let segmentLayers = [];
+        let allSegmentsLayer = null;
+
+        const panelBody = document.getElementById('panel-body');
+        const panelHeader = document.getElementById('panel-header');
+        const panel = document.getElementById('panel');
+        const segNav = document.getElementById('segment-nav');
+        const segInfo = document.getElementById('segment-info');
+        const btnPrev = document.getElementById('btn-prev');
+        const btnNext = document.getElementById('btn-next');
+
+        panelHeader.addEventListener('click', () => {
+            panel.classList.toggle('collapsed');
+            document.getElementById('panel-toggle').textContent =
+                panel.classList.contains('collapsed') ? '▶' : '▼';
+        });
+
+        cityOrder.forEach(cityKey => {
+            const cityLabel = cityNames[cityKey];
+            const codes = cityDistricts[cityKey];
+
+            const header = document.createElement('div');
+            header.className = 'city-group-header';
+            header.dataset.city = cityKey;
+            header.innerHTML = `<span>${cityLabel} (${codes.length})</span><span class="toggle">▶</span>`;
+
+            const container = document.createElement('div');
+            container.className = 'city-districts';
+            container.dataset.city = cityKey;
+
+            codes.forEach(code => {
+                const item = document.createElement('div');
+                item.className = 'district-item';
+                item.dataset.code = code;
+                item.dataset.city = cityKey;
+                item.innerHTML = `<span>${districtNames[code] || code}</span><span class="meta" id="meta-${code}"></span>`;
+                item.addEventListener('click', () => loadDistrict(cityKey, code));
+                container.appendChild(item);
+            });
+
+            header.addEventListener('click', () => {
+                const isOpen = container.classList.contains('open');
+                container.classList.toggle('open');
+                header.querySelector('.toggle').textContent = isOpen ? '▶' : '▼';
+            });
+
+            panelBody.appendChild(header);
+            panelBody.appendChild(container);
+        });
+
+        document.getElementById('search-input').addEventListener('input', function() {
+            const q = this.value.trim().toLowerCase();
+            document.querySelectorAll('.city-group-header').forEach(header => {
+                const cityKey = header.dataset.city;
+                const cityLabel = cityNames[cityKey];
+                const container = panelBody.querySelector(`.city-districts[data-city="${cityKey}"]`);
+                const codes = cityDistricts[cityKey];
+
+                if (!q) {
+                    header.style.display = '';
+                    container.style.display = '';
+                    container.classList.remove('open');
+                    header.querySelector('.toggle').textContent = '▶';
+                    container.querySelectorAll('.district-item').forEach(item => item.style.display = '');
+                    return;
+                }
+
+                const cityMatch = cityLabel.includes(q);
+                let anyDistrictMatch = false;
+                codes.forEach(code => {
+                    const name = districtNames[code] || code;
+                    const match = cityMatch || name.toLowerCase().includes(q) || code.includes(q);
+                    const item = container.querySelector(`[data-code="${code}"]`);
+                    if (item) item.style.display = match ? '' : 'none';
+                    if (match) anyDistrictMatch = true;
+                });
+
+                const show = cityMatch || anyDistrictMatch;
+                header.style.display = show ? '' : 'none';
+                container.style.display = show ? '' : 'none';
+                if (show && q) {
+                    container.classList.add('open');
+                    header.querySelector('.toggle').textContent = '▼';
+                }
+            });
+        });
+
+        function clearMap() {
+            segmentLayers.forEach(l => map.removeLayer(l));
+            segmentLayers = [];
+            if (allSegmentsLayer) {
+                map.removeLayer(allSegmentsLayer);
+                allSegmentsLayer = null;
+            }
+        }
+
+        async function loadDistrict(cityKey, code) {
+            document.querySelectorAll('.district-item').forEach(el => {
+                el.classList.toggle('active', el.dataset.code === code);
+            });
+            document.querySelectorAll('.city-group-header').forEach(el => {
+                el.classList.toggle('active', el.dataset.city === cityKey);
+            });
+
+            const container = panelBody.querySelector(`.city-districts[data-city="${cityKey}"]`);
+            if (container && !container.classList.contains('open')) {
+                container.classList.add('open');
+                const header = panelBody.querySelector(`.city-group-header[data-city="${cityKey}"]`);
+                if (header) header.querySelector('.toggle').textContent = '▼';
+            }
+
+            clearMap();
+            currentCity = cityKey;
+            currentCode = code;
+
+            const resp = await fetch(`output/${cityKey}/${code}.geojson`);
+            currentData = await resp.json();
+            currentSegment = 0;
+
+            allSegmentsLayer = L.layerGroup().addTo(map);
+            currentData.features.forEach((feat, i) => {
+                const coords = feat.geometry.coordinates.map(c => [c[1], c[0]]);
+                const line = L.polyline(coords, { color: '#999', weight: 2, opacity: 0.5 });
+                line.on('click', () => showSegment(i));
+                line.addTo(allSegmentsLayer);
+            });
+
+            const allBounds = allSegmentsLayer.getLayers().reduce((bounds, layer) => {
+                return bounds.extend(layer.getBounds());
+            }, L.latLngBounds([]));
+            map.fitBounds(allBounds, { padding: [50, 50] });
+
+            segNav.style.display = 'flex';
+            showSegment(0);
+
+            const metaEl = document.getElementById(`meta-${code}`);
+            if (metaEl && !metaEl.textContent) {
+                metaEl.textContent = `${currentData.features.length} 段`;
+            }
+        }
+
+        function showSegment(idx) {
+            currentSegment = idx;
+            const total = currentData.features.length;
+            const feat = currentData.features[idx];
+
+            segmentLayers.forEach(l => map.removeLayer(l));
+            segmentLayers = [];
+
+            allSegmentsLayer.getLayers().forEach((layer, i) => {
+                layer.setStyle({
+                    color: '#999',
+                    weight: i === idx ? 0 : 2,
+                    opacity: i === idx ? 0 : 0.4
+                });
+            });
+
+            const coords = feat.geometry.coordinates.map(c => [c[1], c[0]]);
+
+            const halo = L.polyline(coords, { color: '#fff', weight: 10, opacity: 0.9 }).addTo(map);
+            segmentLayers.push(halo);
+
+            const line = L.polyline(coords, { color: '#1a3a6b', weight: 5, opacity: 0.9 }).addTo(map);
+            segmentLayers.push(line);
+
+            const arrows = L.polylineDecorator(line, {
+                patterns: [{
+                    offset: 20, repeat: 80,
+                    symbol: L.Symbol.arrowHead({
+                        pixelSize: 20, headAngle: 45,
+                        pathOptions: { color: '#fff', fillColor: '#1a3a6b', weight: 2, opacity: 1, fillOpacity: 1 }
+                    })
+                }]
+            }).addTo(map);
+            segmentLayers.push(arrows);
+
+            const startMarker = L.circleMarker(coords[0], {
+                radius: 7, color: '#fff', fillColor: '#2ecc40', fillOpacity: 1, weight: 2
+            }).bindTooltip('起點', { permanent: false }).addTo(map);
+            segmentLayers.push(startMarker);
+
+            const endMarker = L.circleMarker(coords[coords.length - 1], {
+                radius: 7, color: '#fff', fillColor: '#e74c3c', fillOpacity: 1, weight: 2
+            }).bindTooltip('終點', { permanent: false }).addTo(map);
+            segmentLayers.push(endMarker);
+
+            map.fitBounds(line.getBounds(), { padding: [60, 60] });
+
+            const distName = districtNames[feat.properties.district] || feat.properties.district;
+            const cityLabel = currentCity ? cityNames[currentCity] : '';
+            segInfo.innerHTML = `<strong>${cityLabel} ${distName}</strong><br>第 ${idx + 1} / ${total} 段 (${feat.properties.km} km)`;
+
+            btnPrev.disabled = idx === 0;
+            btnNext.disabled = idx === total - 1;
+        }
+
+        btnPrev.addEventListener('click', () => {
+            if (currentSegment > 0) showSegment(currentSegment - 1);
+        });
+        btnNext.addEventListener('click', () => {
+            if (currentSegment < currentData.features.length - 1) showSegment(currentSegment + 1);
+        });
+
+        // Handle URL hash for direct linking
+        function loadFromHash() {
+            const hash = window.location.hash.slice(1);
+            if (!hash) return;
+            const parts = hash.split('/');
+            if (parts.length >= 2) {
+                const cityKey = parts[0];
+                const code = parts[1];
+                if (cityDistricts[cityKey] && cityDistricts[cityKey].includes(code)) {
+                    loadDistrict(cityKey, code);
+                }
+            }
+        }
+        loadFromHash();
+    </script>
+</body>
+</html>

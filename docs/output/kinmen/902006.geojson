@@ -1,0 +1,1 @@
+{"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {"district": "902006", "segment": 1, "total_segments": 1, "km": 0.46}, "geometry": {"type": "LineString", "coordinates": [[121.45332, 24.988696], [121.450807, 24.992197]]}}]}
