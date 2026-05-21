@@ -107,7 +107,13 @@ map_cover/
 │   ├── yunlin_3.xlsx
 │   └── ...                     # 共 19 個檔案，涵蓋 17 個縣市
 ├── scripts/
-│   └── generate_all.py         # 資料處理主程式
+│   ├── generate_all.py         # 產生掃街路線 GeoJSON
+│   └── generate_csv.py         # 產生統一格式 CSV
+├── data/                       # 統一格式 CSV (generate_csv.py 產出)
+│   ├── taipei/
+│   │   ├── 63000010.csv
+│   │   └── ...
+│   └── .../
 ├── docs/                       # 網頁與產出資料（可直接部署為靜態網站）
 │   ├── index.html              # 地圖瀏覽介面
 │   └── output/                 # 產出的 GeoJSON (43 MB, 330 個檔案)
@@ -131,6 +137,18 @@ python3 scripts/generate_all.py
 ```
 
 處理 17 個縣市約需 2~3 分鐘，產出寫入 `docs/output/`。
+
+### 產生統一格式 CSV
+
+```bash
+python3 scripts/generate_csv.py
+```
+
+將各縣市不同格式的原始資料統一為 UTF-8 CSV，依鄉鎮市區分檔輸出至 `data/<city>/<district_code>.csv`。
+
+統一欄位：`city_code, district_code, village, neighbor, street, area, lane, alley, number, address, x, y`
+
+此步驟不做去重複或座標轉換，保留原始資料完整內容。
 
 ### 瀏覽地圖
 
