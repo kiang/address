@@ -239,6 +239,64 @@ function drawSavedTracks() {
     });
 }
 
+function formatDuration(ms) {
+    const totalSec = Math.floor(ms / 1000);
+    const h = Math.floor(totalSec / 3600);
+    const m = Math.floor((totalSec % 3600) / 60);
+    const s = totalSec % 60;
+    if (h > 0) return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+    return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
+function computeTrackAnalytics(t) {
+    const pts = t.points || [];
+    const distKm = (t.distanceM || 0) / 1000;
+    let durationMs = 0;
+    if (pts.length >= 2) {
+        durationMs = pts[pts.length - 1].ts - pts[0].ts;
+    }
+    const durationMin = durationMs / 60000;
+    const avgSpeedKmh = durationMin > 0 ? (distKm / durationMin) * 60 : 0;
+    const avgAcc = pts.length > 0
+        ? pts.reduce((sum, p) => sum + (p.acc || 0), 0) / pts.length
+        : 0;
+    return {
+        pointCount: pts.length,
+        distKm,
+        durationMs,
+        durationStr: formatDuration(durationMs),
+        avgSpeedKmh: +avgSpeedKmh.toFixed(1),
+        avgAccM: +avgAcc.toFixed(1),
+        startTime: t.startTime || (pts.length > 0 ? pts[0].ts : 0),
+        endTime: pts.length > 0 ? pts[pts.length - 1].ts : 0
+    };
+}
+
+function computeSummary(tracks) {
+    let totalDist = 0, totalDuration = 0, totalPoints = 0, trackCount = 0;
+    const cities = new Set();
+    const districts = new Set();
+    for (const key in tracks) {
+        const t = tracks[key];
+        const a = computeTrackAnalytics(t);
+        totalDist += a.distKm;
+        totalDuration += a.durationMs;
+        totalPoints += a.pointCount;
+        trackCount++;
+        if (t.city) cities.add(t.city);
+        if (t.code) districts.add(t.code);
+    }
+    return {
+        trackCount,
+        totalDistKm: +totalDist.toFixed(2),
+        totalDurationStr: formatDuration(totalDuration),
+        totalDurationMs: totalDuration,
+        totalPoints,
+        cityCount: cities.size,
+        districtCount: districts.size
+    };
+}
+
 function openDashboard() {
     document.getElementById('dashboard-modal').style.display = 'flex';
     renderDashboardList();
@@ -261,28 +319,73 @@ function renderDashboardList() {
     keys.sort((a, b) => (tracks[b].startTime || 0) - (tracks[a].startTime || 0));
 
     list.innerHTML = '';
+
+    const summary = computeSummary(tracks);
+    const summaryEl = document.createElement('div');
+    summaryEl.className = 'dashboard-summary';
+    summaryEl.innerHTML =
+        `<div class="summary-title">總計</div>` +
+        `<div class="summary-grid">` +
+            `<div class="summary-stat"><span class="summary-value">${summary.trackCount}</span><span class="summary-label">筆紀錄</span></div>` +
+            `<div class="summary-stat"><span class="summary-value">${summary.totalDistKm}</span><span class="summary-label">公里</span></div>` +
+            `<div class="summary-stat"><span class="summary-value">${summary.totalDurationStr}</span><span class="summary-label">總時間</span></div>` +
+            `<div class="summary-stat"><span class="summary-value">${summary.totalPoints}</span><span class="summary-label">GPS 點</span></div>` +
+            `<div class="summary-stat"><span class="summary-value">${summary.cityCount}</span><span class="summary-label">縣市</span></div>` +
+            `<div class="summary-stat"><span class="summary-value">${summary.districtCount}</span><span class="summary-label">行政區</span></div>` +
+        `</div>`;
+    list.appendChild(summaryEl);
+
     keys.forEach(key => {
         const t = tracks[key];
         const city = t.city;
         const code = t.code;
         const seg = t.segment;
+        const a = computeTrackAnalytics(t);
 
         const cityLabel = cityNames[city] || city;
         const distLabel = districtNames[code] || code;
-        const km = (t.distanceM / 1000).toFixed(2);
-        const pts = t.points ? t.points.length : 0;
-        const date = t.startTime ? new Date(t.startTime).toLocaleString('zh-TW') : '';
+        const date = a.startTime ? new Date(a.startTime).toLocaleString('zh-TW') : '';
 
         const item = document.createElement('div');
         item.className = 'track-item';
         item.innerHTML =
-            `<div class="track-item-title">${cityLabel} ${distLabel} 第 ${seg + 1} 段</div>` +
-            `<div class="track-item-meta">${date} / ${pts} 點 / ${km} km</div>` +
-            `<div class="track-item-actions">` +
-                `<button class="track-btn-continue">繼續</button>` +
-                `<button class="track-btn-export">匯出</button>` +
-                `<button class="track-btn-delete">刪除</button>` +
+            `<div class="track-item-header">` +
+                `<div>` +
+                    `<div class="track-item-title">${cityLabel} ${distLabel} 第 ${seg + 1} 段</div>` +
+                    `<div class="track-item-meta">${date}</div>` +
+                `</div>` +
+                `<button class="track-item-toggle">&#x25BC;</button>` +
+            `</div>` +
+            `<div class="track-item-details" style="display:none">` +
+                `<div class="track-details-grid">` +
+                    `<div class="detail-cell"><span class="detail-value">${a.distKm.toFixed(2)}</span><span class="detail-label">公里</span></div>` +
+                    `<div class="detail-cell"><span class="detail-value">${a.durationStr}</span><span class="detail-label">時間</span></div>` +
+                    `<div class="detail-cell"><span class="detail-value">${a.avgSpeedKmh}</span><span class="detail-label">km/h</span></div>` +
+                    `<div class="detail-cell"><span class="detail-value">${a.pointCount}</span><span class="detail-label">GPS 點</span></div>` +
+                    `<div class="detail-cell"><span class="detail-value">${a.avgAccM}</span><span class="detail-label">平均精度(m)</span></div>` +
+                    `<div class="detail-cell"><span class="detail-value">${a.endTime ? new Date(a.endTime).toLocaleTimeString('zh-TW') : '-'}</span><span class="detail-label">最後記錄</span></div>` +
+                `</div>` +
+                `<div class="track-item-actions">` +
+                    `<button class="track-btn-continue">繼續</button>` +
+                    `<button class="track-btn-export">匯出</button>` +
+                    `<button class="track-btn-delete">刪除</button>` +
+                `</div>` +
             `</div>`;
+
+        const toggleBtn = item.querySelector('.track-item-toggle');
+        const details = item.querySelector('.track-item-details');
+        toggleBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const open = details.style.display !== 'none';
+            details.style.display = open ? 'none' : '';
+            toggleBtn.textContent = open ? '▼' : '▲';
+        });
+
+        item.querySelector('.track-item-header').addEventListener('click', () => {
+            const open = details.style.display !== 'none';
+            details.style.display = open ? 'none' : '';
+            toggleBtn.textContent = open ? '▼' : '▲';
+        });
 
         item.querySelector('.track-btn-continue').addEventListener('click', () => {
             closeDashboard();
