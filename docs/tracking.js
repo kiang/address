@@ -351,11 +351,14 @@ function updateTrackingUI() {
 
     const segNavEl = document.getElementById('segment-nav');
 
+    const segTracksEl = document.getElementById('segment-tracks');
+
     if (tracking.active) {
         btnStart.style.display = 'none';
         btnStop.style.display = '';
         btnRecenter.style.display = '';
         if (segNavEl) segNavEl.style.display = 'none';
+        if (segTracksEl) segTracksEl.style.display = 'none';
         updateTrackingStats();
     } else {
         btnStop.style.display = 'none';
@@ -364,10 +367,44 @@ function updateTrackingUI() {
         statsEl.textContent = '';
         btnStart.style.display = '';
         if (segNavEl) segNavEl.style.display = 'flex';
+        renderSegmentTracks(segTracksEl);
     }
 
     positionTrackingBar();
     updateDashboardButton();
+}
+
+function renderSegmentTracks(el) {
+    if (!el) return;
+    if (!currentCity || currentCode == null) {
+        el.style.display = 'none';
+        return;
+    }
+    const saved = getTracksForSegment(currentCity, currentCode, currentSegment);
+    if (saved.length === 0) {
+        el.style.display = 'none';
+        return;
+    }
+
+    el.style.display = 'block';
+    el.innerHTML = `<div class="seg-track-title">過去紀錄 (${saved.length})</div>`;
+    saved.forEach(t => {
+        const a = computeTrackAnalytics(t);
+        const date = a.startTime ? new Date(a.startTime).toLocaleString('zh-TW') : '';
+        const pctText = a.totalRoutePoints > 0 ? ` · ${a.touchPct}%` : '';
+        const item = document.createElement('div');
+        item.className = 'seg-track-item';
+        item.innerHTML =
+            `<div class="seg-track-info">` +
+                `<span>${a.distKm.toFixed(2)} km / ${a.durationStr}${pctText}</span>` +
+                `<span class="seg-track-meta">${date}</span>` +
+            `</div>` +
+            `<button class="seg-track-btn">繼續</button>`;
+        item.querySelector('.seg-track-btn').addEventListener('click', () => {
+            startTracking(t.key);
+        });
+        el.appendChild(item);
+    });
 }
 
 function updateTrackingStats() {
