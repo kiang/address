@@ -98,6 +98,10 @@ document.getElementById('search-input').addEventListener('input', function() {
 
 const trackingBar = document.getElementById('tracking-bar');
 
+document.getElementById('btn-dashboard').addEventListener('click', openDashboard);
+document.getElementById('btn-dashboard-close').addEventListener('click', closeDashboard);
+updateDashboardButton();
+
 document.getElementById('btn-track-start').addEventListener('click', startTracking);
 document.getElementById('btn-track-stop').addEventListener('click', stopTracking);
 document.getElementById('btn-track-clear').addEventListener('click', () => {

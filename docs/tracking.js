@@ -205,6 +205,8 @@ function updateTrackingUI() {
         }
         btnStart.style.display = '';
     }
+
+    updateDashboardButton();
 }
 
 function updateTrackingStats() {
@@ -235,6 +237,99 @@ function drawSavedTrack() {
         color: '#e67e22', weight: 4, opacity: 0.7, dashArray: '8,6'
     }).addTo(map);
     segmentLayers.push(line);
+}
+
+function openDashboard() {
+    const dashboard = document.getElementById('dashboard');
+    const panelBodyEl = document.getElementById('panel-body');
+    const list = document.getElementById('dashboard-list');
+
+    dashboard.style.display = '';
+    panelBodyEl.style.display = 'none';
+
+    renderDashboardList();
+}
+
+function closeDashboard() {
+    const dashboard = document.getElementById('dashboard');
+    const panelBodyEl = document.getElementById('panel-body');
+
+    dashboard.style.display = 'none';
+    panelBodyEl.style.display = '';
+}
+
+function renderDashboardList() {
+    const list = document.getElementById('dashboard-list');
+    const tracks = getAllTracks();
+    const keys = Object.keys(tracks);
+
+    if (keys.length === 0) {
+        list.innerHTML = '<div class="dashboard-empty">尚無掃街紀錄</div>';
+        return;
+    }
+
+    keys.sort((a, b) => (tracks[b].startTime || 0) - (tracks[a].startTime || 0));
+
+    list.innerHTML = '';
+    keys.forEach(key => {
+        const t = tracks[key];
+        const parts = key.split('/');
+        const city = parts[0];
+        const code = parts[1];
+        const seg = parseInt(parts[2], 10);
+
+        const cityLabel = cityNames[city] || city;
+        const distLabel = districtNames[code] || code;
+        const km = (t.distanceM / 1000).toFixed(2);
+        const pts = t.points ? t.points.length : 0;
+        const date = t.startTime ? new Date(t.startTime).toLocaleString('zh-TW') : '';
+
+        const item = document.createElement('div');
+        item.className = 'track-item';
+        item.innerHTML =
+            `<div class="track-item-title">${cityLabel} ${distLabel} 第 ${seg + 1} 段</div>` +
+            `<div class="track-item-meta">${date} / ${pts} 點 / ${km} km</div>` +
+            `<div class="track-item-actions">` +
+                `<button class="track-btn-continue">繼續</button>` +
+                `<button class="track-btn-export">匯出</button>` +
+                `<button class="track-btn-delete">刪除</button>` +
+            `</div>`;
+
+        item.querySelector('.track-btn-continue').addEventListener('click', () => {
+            closeDashboard();
+            loadDistrict(city, code).then(() => {
+                showSegment(seg);
+            });
+        });
+
+        item.querySelector('.track-btn-export').addEventListener('click', () => {
+            exportTrack(key);
+        });
+
+        item.querySelector('.track-btn-delete').addEventListener('click', () => {
+            if (confirm(`確定刪除「${cityLabel} ${distLabel} 第 ${seg + 1} 段」的紀錄？`)) {
+                deleteTrack(key);
+                renderDashboardList();
+                updateDashboardButton();
+            }
+        });
+
+        list.appendChild(item);
+    });
+}
+
+function updateDashboardButton() {
+    const btn = document.getElementById('btn-dashboard');
+    if (!btn) return;
+    const tracks = getAllTracks();
+    const count = Object.keys(tracks).length;
+    if (count > 0) {
+        btn.classList.add('has-tracks');
+        btn.textContent = `紀錄 (${count})`;
+    } else {
+        btn.classList.remove('has-tracks');
+        btn.textContent = '掃街紀錄';
+    }
 }
 
 function exportTrack(key) {
