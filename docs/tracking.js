@@ -305,10 +305,13 @@ function updateTrackingUI() {
 
     if (!btnStart) return;
 
+    const segNavEl = document.getElementById('segment-nav');
+
     if (tracking.active) {
         btnStart.style.display = 'none';
         btnStop.style.display = '';
         btnRecenter.style.display = '';
+        if (segNavEl) segNavEl.style.display = 'none';
         updateTrackingStats();
     } else {
         btnStop.style.display = 'none';
@@ -316,6 +319,7 @@ function updateTrackingUI() {
         btnStart.textContent = '開始掃街';
         statsEl.textContent = '';
         btnStart.style.display = '';
+        if (segNavEl) segNavEl.style.display = 'flex';
     }
 
     updateDashboardButton();
