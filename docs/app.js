@@ -96,7 +96,21 @@ document.getElementById('search-input').addEventListener('input', function() {
     });
 });
 
+const trackingBar = document.getElementById('tracking-bar');
+
+document.getElementById('btn-track-start').addEventListener('click', startTracking);
+document.getElementById('btn-track-stop').addEventListener('click', stopTracking);
+document.getElementById('btn-track-clear').addEventListener('click', () => {
+    if (confirm('確定清除此段的掃街紀錄？')) clearTrackForCurrentSegment();
+});
+document.getElementById('btn-track-export').addEventListener('click', () => {
+    if (currentCity && currentCode != null) {
+        exportTrack(makeSessionKey(currentCity, currentCode, currentSegment));
+    }
+});
+
 function clearMap() {
+    if (tracking.active) stopTracking();
     segmentLayers.forEach(l => map.removeLayer(l));
     segmentLayers = [];
     if (allSegmentsLayer) {
@@ -203,6 +217,14 @@ function showSegment(idx) {
 
     btnPrev.disabled = idx === 0;
     btnNext.disabled = idx === total - 1;
+
+    drawSavedTrack();
+    trackingBar.style.display = 'flex';
+
+    const saved = getTrackForSegment(currentCity, currentCode, idx);
+    const btnExport = document.getElementById('btn-track-export');
+    btnExport.style.display = (saved && saved.points.length > 0) ? '' : 'none';
+    updateTrackingUI();
 }
 
 btnPrev.addEventListener('click', () => {

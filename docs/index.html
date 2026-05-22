@@ -29,10 +29,18 @@
         <div id="segment-info"></div>
         <button id="btn-next">下一段 &#x25B6;</button>
     </div>
+    <div id="tracking-bar">
+        <button id="btn-track-start">開始掃街</button>
+        <button id="btn-track-stop" style="display:none">停止掃街</button>
+        <button id="btn-track-clear" style="display:none">清除紀錄</button>
+        <button id="btn-track-export" style="display:none">匯出</button>
+        <div id="tracking-stats"></div>
+    </div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="leaflet-decorator.js"></script>
     <script src="data.js"></script>
+    <script src="tracking.js"></script>
     <script src="app.js"></script>
     <!-- Google tag (gtag.js) -->
     <script async src="https://www.googletagmanager.com/gtag/js?id=G-FJ1JR851SJ"></script>
