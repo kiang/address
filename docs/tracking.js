@@ -1,6 +1,6 @@
 const STORAGE_KEY = 'sweep_tracks';
 const MIN_DISTANCE_M = 10;
-const TOUCH_RADIUS_M = 30;
+const TOUCH_RADIUS_M = 50;
 
 let tracking = {
     active: false,
