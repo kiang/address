@@ -187,9 +187,10 @@
 
         const cityOrder = ["taipei","new_taipei","taoyuan","hsinchu_city","hsinchu_county","miaoli","taichung","changhua","yunlin","chiayi_county","tainan","kaohsiung","pingtung","taitung","hualien","penghu","kinmen"];
 
-        const map = L.map('map').setView([23.7, 120.9], 8);
+        const map = L.map('map', {zoomControl: false}).setView([23.7, 120.9], 8);
+        L.control.zoom({position: 'topright'}).addTo(map);
         L.tileLayer('https://wmts.nlsc.gov.tw/wmts/EMAP/default/GoogleMapsCompatible/{z}/{y}/{x}', {
-            attribution: '&copy; 內政部國土測繪中心',
+            attribution: '&copy; 內政部國土測繪中心 | <a href="https://docs.google.com/forms/d/e/1FAIpQLSeMEfdW_1AG7-OBxD_P0_qW0WEUOwxSvZoLWsVLxvrRY7A8eA/viewform" target="_blank">府城 AI 科技診療室</a>',
             maxZoom: 20
         }).addTo(map);
 
