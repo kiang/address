@@ -746,13 +746,13 @@ let pendingExportAction = null;
 
 function showExportMenu(title, action) {
     pendingExportAction = action;
-    const menu = document.getElementById('export-menu');
-    menu.querySelector('.export-menu-title').textContent = title;
-    menu.style.display = 'flex';
+    const modal = document.getElementById('export-modal');
+    modal.querySelector('.export-menu-title').textContent = title;
+    modal.style.display = 'flex';
 }
 
 function hideExportMenu() {
-    document.getElementById('export-menu').style.display = 'none';
+    document.getElementById('export-modal').style.display = 'none';
     pendingExportAction = null;
 }
 
@@ -763,3 +763,6 @@ document.querySelectorAll('#export-menu .export-opt').forEach(btn => {
     });
 });
 document.querySelector('#export-menu .export-cancel').addEventListener('click', hideExportMenu);
+document.getElementById('export-modal').addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) hideExportMenu();
+});
