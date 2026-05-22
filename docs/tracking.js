@@ -42,17 +42,28 @@ function deleteTrack(key) {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(tracks));
 }
 
-function makeSessionKey(city, code, segment) {
+function makeSegmentPrefix(city, code, segment) {
     return `${city}/${code}/${segment}`;
 }
 
-function getTrackForSegment(city, code, segment) {
-    const key = makeSessionKey(city, code, segment);
-    const tracks = getAllTracks();
-    return tracks[key] || null;
+function makeSessionKey(city, code, segment, ts) {
+    return `${city}/${code}/${segment}/${ts}`;
 }
 
-function startTracking() {
+function getTracksForSegment(city, code, segment) {
+    const prefix = makeSegmentPrefix(city, code, segment) + '/';
+    const tracks = getAllTracks();
+    const result = [];
+    for (const key in tracks) {
+        if (key.startsWith(prefix)) {
+            result.push({ key, ...tracks[key] });
+        }
+    }
+    result.sort((a, b) => (b.startTime || 0) - (a.startTime || 0));
+    return result;
+}
+
+function startTracking(resumeKey) {
     if (tracking.active) return;
     if (!currentCity || !currentData) return;
 
@@ -61,13 +72,21 @@ function startTracking() {
         return;
     }
 
-    const key = makeSessionKey(currentCity, currentCode, currentSegment);
-    const existing = getTrackForSegment(currentCity, currentCode, currentSegment);
+    let key, existing;
+    if (resumeKey) {
+        key = resumeKey;
+        const tracks = getAllTracks();
+        existing = tracks[key] || null;
+    } else {
+        const ts = Date.now();
+        key = makeSessionKey(currentCity, currentCode, currentSegment, ts);
+        existing = null;
+    }
 
     tracking.active = true;
     tracking.sessionKey = key;
     tracking.startTime = existing ? existing.startTime : Date.now();
-    tracking.points = existing ? existing.points : [];
+    tracking.points = existing ? [...existing.points] : [];
     tracking.distanceM = existing ? existing.distanceM : 0;
     tracking.lastPoint = tracking.points.length > 0
         ? tracking.points[tracking.points.length - 1]
@@ -178,7 +197,6 @@ function onGpsError(err) {
 function updateTrackingUI() {
     const btnStart = document.getElementById('btn-track-start');
     const btnStop = document.getElementById('btn-track-stop');
-    const btnClear = document.getElementById('btn-track-clear');
     const statsEl = document.getElementById('tracking-stats');
 
     if (!btnStart) return;
@@ -186,23 +204,11 @@ function updateTrackingUI() {
     if (tracking.active) {
         btnStart.style.display = 'none';
         btnStop.style.display = '';
-        btnClear.style.display = 'none';
         updateTrackingStats();
     } else {
         btnStop.style.display = 'none';
-
-        const saved = currentCity && currentCode != null
-            ? getTrackForSegment(currentCity, currentCode, currentSegment)
-            : null;
-        if (saved && saved.points.length > 0) {
-            btnStart.textContent = '繼續掃街';
-            btnClear.style.display = '';
-            statsEl.textContent = `已記錄 ${saved.points.length} 點 / ${(saved.distanceM / 1000).toFixed(2)} km`;
-        } else {
-            btnStart.textContent = '開始掃街';
-            btnClear.style.display = 'none';
-            statsEl.textContent = '';
-        }
+        btnStart.textContent = '開始掃街';
+        statsEl.textContent = '';
         btnStart.style.display = '';
     }
 
@@ -219,43 +225,27 @@ function updateTrackingStats() {
     statsEl.textContent = `${tracking.points.length} 點 / ${km} km / ${min}:${sec.toString().padStart(2, '0')}`;
 }
 
-function clearTrackForCurrentSegment() {
+function drawSavedTracks() {
     if (!currentCity || currentCode == null) return;
-    const key = makeSessionKey(currentCity, currentCode, currentSegment);
-    deleteTrack(key);
-    updateTrackingUI();
-    showSegment(currentSegment);
-}
-
-function drawSavedTrack() {
-    if (!currentCity || currentCode == null) return;
-    const saved = getTrackForSegment(currentCity, currentCode, currentSegment);
-    if (!saved || saved.points.length < 2) return;
-
-    const latlngs = saved.points.map(p => [p.lat, p.lng]);
-    const line = L.polyline(latlngs, {
-        color: '#e67e22', weight: 4, opacity: 0.7, dashArray: '8,6'
-    }).addTo(map);
-    segmentLayers.push(line);
+    const saved = getTracksForSegment(currentCity, currentCode, currentSegment);
+    const colors = ['#e67e22', '#9b59b6', '#1abc9c', '#e74c3c', '#3498db'];
+    saved.forEach((t, i) => {
+        if (!t.points || t.points.length < 2) return;
+        const latlngs = t.points.map(p => [p.lat, p.lng]);
+        const line = L.polyline(latlngs, {
+            color: colors[i % colors.length], weight: 4, opacity: 0.7, dashArray: '8,6'
+        }).addTo(map);
+        segmentLayers.push(line);
+    });
 }
 
 function openDashboard() {
-    const dashboard = document.getElementById('dashboard');
-    const panelBodyEl = document.getElementById('panel-body');
-    const list = document.getElementById('dashboard-list');
-
-    dashboard.style.display = '';
-    panelBodyEl.style.display = 'none';
-
+    document.getElementById('dashboard-modal').style.display = 'flex';
     renderDashboardList();
 }
 
 function closeDashboard() {
-    const dashboard = document.getElementById('dashboard');
-    const panelBodyEl = document.getElementById('panel-body');
-
-    dashboard.style.display = 'none';
-    panelBodyEl.style.display = '';
+    document.getElementById('dashboard-modal').style.display = 'none';
 }
 
 function renderDashboardList() {
@@ -273,10 +263,9 @@ function renderDashboardList() {
     list.innerHTML = '';
     keys.forEach(key => {
         const t = tracks[key];
-        const parts = key.split('/');
-        const city = parts[0];
-        const code = parts[1];
-        const seg = parseInt(parts[2], 10);
+        const city = t.city;
+        const code = t.code;
+        const seg = t.segment;
 
         const cityLabel = cityNames[city] || city;
         const distLabel = districtNames[code] || code;
@@ -299,6 +288,7 @@ function renderDashboardList() {
             closeDashboard();
             loadDistrict(city, code).then(() => {
                 showSegment(seg);
+                startTracking(key);
             });
         });
 

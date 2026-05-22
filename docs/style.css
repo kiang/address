@@ -46,7 +46,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
 #segment-nav button:hover { background: #3a7bc8; }
 #segment-nav button:disabled { background: #ccc; cursor: default; }
 #segment-info { min-width: 120px; text-align: center; }
-.collapsed #panel-body, .collapsed #panel-search, .collapsed #dashboard { display: none; }
+.collapsed #panel-body, .collapsed #panel-search { display: none; }
 #panel-search {
     padding: 8px 10px; border-bottom: 1px solid #e0e0e0;
     display: flex; gap: 6px; align-items: center;
@@ -64,20 +64,30 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
 #btn-dashboard:hover { background: #e8e8e8; }
 #btn-dashboard.has-tracks { color: #e67e22; border-color: #e67e22; font-weight: 600; }
 
+#dashboard-modal {
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    z-index: 2000; background: rgba(0,0,0,0.4);
+    display: flex; align-items: center; justify-content: center;
+}
 #dashboard {
-    overflow-y: auto; flex: 1;
+    background: white; border-radius: 10px;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.3);
+    width: 420px; max-width: calc(100vw - 32px);
+    max-height: calc(100vh - 60px);
+    display: flex; flex-direction: column; overflow: hidden;
 }
 #dashboard-header {
-    padding: 10px 14px; border-bottom: 1px solid #e0e0e0;
-    font-size: 14px; font-weight: 600;
+    padding: 14px 18px; border-bottom: 1px solid #e0e0e0;
+    font-size: 16px; font-weight: 600;
     display: flex; justify-content: space-between; align-items: center;
+    flex-shrink: 0;
 }
 #dashboard-header button {
-    border: none; background: none; font-size: 16px; cursor: pointer;
+    border: none; background: none; font-size: 18px; cursor: pointer;
     color: #888; padding: 0 4px;
 }
 #dashboard-header button:hover { color: #333; }
-#dashboard-list { padding: 0; }
+#dashboard-list { padding: 0; overflow-y: auto; flex: 1; }
 .dashboard-empty {
     padding: 24px 14px; text-align: center; color: #999; font-size: 13px;
 }
@@ -115,10 +125,6 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
 #btn-track-start:hover { background: #27ae36; }
 #btn-track-stop { background: #e74c3c; }
 #btn-track-stop:hover { background: #c0392b; }
-#btn-track-clear { background: #888; }
-#btn-track-clear:hover { background: #666; }
-#btn-track-export { background: #3498db; }
-#btn-track-export:hover { background: #2980b9; }
 #tracking-stats {
     font-size: 12px; color: #555; text-align: center; width: 100%;
 }
