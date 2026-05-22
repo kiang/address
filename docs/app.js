@@ -59,6 +59,46 @@ cityOrder.forEach(cityKey => {
     panelBody.appendChild(container);
 });
 
+function reorderPanelByTracks() {
+    const tracks = getAllTracks();
+    const trackedCities = new Set();
+    const trackedCodes = new Set();
+    for (const key in tracks) {
+        const t = tracks[key];
+        if (t.city) trackedCities.add(t.city);
+        if (t.code) trackedCodes.add(t.code);
+    }
+
+    const headers = [...panelBody.querySelectorAll('.city-group-header')];
+    const tracked = [];
+    const untracked = [];
+    headers.forEach(header => {
+        const cityKey = header.dataset.city;
+        const container = panelBody.querySelector(`.city-districts[data-city="${cityKey}"]`);
+        if (trackedCities.has(cityKey)) {
+            tracked.push({ header, container, cityKey });
+        } else {
+            untracked.push({ header, container });
+        }
+    });
+
+    tracked.forEach(({ header, container, cityKey }) => {
+        panelBody.appendChild(header);
+        panelBody.appendChild(container);
+        const codes = cityDistricts[cityKey];
+        const items = [...container.querySelectorAll('.district-item')];
+        const trackedItems = items.filter(i => trackedCodes.has(i.dataset.code));
+        const untrackedItems = items.filter(i => !trackedCodes.has(i.dataset.code));
+        trackedItems.forEach(i => container.appendChild(i));
+        untrackedItems.forEach(i => container.appendChild(i));
+    });
+    untracked.forEach(({ header, container }) => {
+        panelBody.appendChild(header);
+        panelBody.appendChild(container);
+    });
+}
+reorderPanelByTracks();
+
 document.getElementById('search-input').addEventListener('input', function() {
     const q = this.value.trim().toLowerCase();
     document.querySelectorAll('.city-group-header').forEach(header => {

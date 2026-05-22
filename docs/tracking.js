@@ -640,6 +640,7 @@ function renderDashboardList() {
 function updateDashboardButton() {
     const btn = document.getElementById('btn-dashboard');
     if (!btn) return;
+    if (typeof reorderPanelByTracks === 'function') reorderPanelByTracks();
     const tracks = getAllTracks();
     const count = Object.keys(tracks).length;
     if (count > 0) {
