@@ -96,6 +96,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
 #btn-track-start:hover { background: #27ae36; }
 #btn-track-stop { background: #e74c3c; }
 #btn-track-stop:hover { background: #c0392b; }
+#btn-recenter { background: #3498db; }
+#btn-recenter:hover { background: #2980b9; }
 #tracking-stats {
     font-size: 14px; color: #555; text-align: center; width: 100%;
 }

@@ -15,7 +15,12 @@ let tracking = {
     distanceM: 0,
     targetCoords: [],
     touchedSet: new Set(),
-    touchMarkers: []
+    touchMarkers: [],
+    guideLine: null,
+    guideTarget: null,
+    nextTargetIdx: -1,
+    nextTargetDist: 0,
+    followUser: true
 };
 
 function haversineM(lat1, lng1, lat2, lng2) {
@@ -67,6 +72,54 @@ function getTracksForSegment(city, code, segment) {
     return result;
 }
 
+function findNextTarget(lat, lng) {
+    let minDist = Infinity;
+    let minIdx = -1;
+    for (let i = 0; i < tracking.targetCoords.length; i++) {
+        if (tracking.touchedSet.has(i)) continue;
+        const tp = tracking.targetCoords[i];
+        const d = haversineM(lat, lng, tp.lat, tp.lng);
+        if (d < minDist) {
+            minDist = d;
+            minIdx = i;
+        }
+    }
+    tracking.nextTargetIdx = minIdx;
+    tracking.nextTargetDist = minIdx >= 0 ? minDist : 0;
+    return minIdx;
+}
+
+function updateGuide(lat, lng) {
+    const idx = findNextTarget(lat, lng);
+    if (idx < 0) {
+        if (tracking.guideLine) { map.removeLayer(tracking.guideLine); tracking.guideLine = null; }
+        if (tracking.guideTarget) { map.removeLayer(tracking.guideTarget); tracking.guideTarget = null; }
+        return;
+    }
+    const tp = tracking.targetCoords[idx];
+    const targetLL = [tp.lat, tp.lng];
+    const userLL = [lat, lng];
+
+    if (tracking.guideLine) {
+        tracking.guideLine.setLatLngs([userLL, targetLL]);
+    } else {
+        tracking.guideLine = L.polyline([userLL, targetLL], {
+            color: '#e74c3c', weight: 3, opacity: 0.7, dashArray: '6,8'
+        }).addTo(map);
+        segmentLayers.push(tracking.guideLine);
+    }
+
+    if (tracking.guideTarget) {
+        tracking.guideTarget.setLatLng(targetLL);
+    } else {
+        tracking.guideTarget = L.circleMarker(targetLL, {
+            radius: 10, color: '#e74c3c', fillColor: '#e74c3c',
+            fillOpacity: 0.4, weight: 2
+        }).addTo(map);
+        segmentLayers.push(tracking.guideTarget);
+    }
+}
+
 function startTracking(resumeKey) {
     if (tracking.active) return;
     if (!currentCity || !currentData) return;
@@ -95,6 +148,7 @@ function startTracking(resumeKey) {
     tracking.lastPoint = tracking.points.length > 0
         ? tracking.points[tracking.points.length - 1]
         : null;
+    tracking.followUser = true;
 
     const feat = currentData.features[currentSegment];
     tracking.targetCoords = feat.geometry.coordinates.map(c => ({ lat: c[1], lng: c[0] }));
@@ -119,13 +173,24 @@ function startTracking(resumeKey) {
     }).addTo(map);
     segmentLayers.push(tracking.accuracyCircle);
 
+    tracking.guideLine = null;
+    tracking.guideTarget = null;
+    tracking.nextTargetIdx = -1;
+    tracking.nextTargetDist = 0;
+
     tracking.watchId = navigator.geolocation.watchPosition(
         onGpsPosition,
         onGpsError,
         { enableHighAccuracy: true, maximumAge: 3000, timeout: 10000 }
     );
 
+    map.on('dragstart', onUserDrag);
+
     updateTrackingUI();
+}
+
+function onUserDrag() {
+    tracking.followUser = false;
 }
 
 function stopTracking() {
@@ -150,6 +215,10 @@ function stopTracking() {
     }
 
     tracking.touchMarkers.forEach(m => map.removeLayer(m));
+    if (tracking.guideLine) { map.removeLayer(tracking.guideLine); }
+    if (tracking.guideTarget) { map.removeLayer(tracking.guideTarget); }
+    map.off('dragstart', onUserDrag);
+
     tracking.active = false;
     tracking.sessionKey = null;
     tracking.lastPoint = null;
@@ -162,6 +231,11 @@ function stopTracking() {
     tracking.targetCoords = [];
     tracking.touchedSet = new Set();
     tracking.touchMarkers = [];
+    tracking.guideLine = null;
+    tracking.guideTarget = null;
+    tracking.nextTargetIdx = -1;
+    tracking.nextTargetDist = 0;
+    tracking.followUser = true;
 
     updateTrackingUI();
 }
@@ -178,9 +252,18 @@ function onGpsPosition(pos) {
         tracking.accuracyCircle.setRadius(acc);
     }
 
+    if (tracking.followUser) {
+        map.setView([lat, lng], Math.max(map.getZoom(), 16), { animate: true });
+    }
+
+    updateGuide(lat, lng);
+
     if (tracking.lastPoint) {
         const d = haversineM(tracking.lastPoint.lat, tracking.lastPoint.lng, lat, lng);
-        if (d < MIN_DISTANCE_M) return;
+        if (d < MIN_DISTANCE_M) {
+            updateTrackingStats();
+            return;
+        }
         tracking.distanceM += d;
     }
 
@@ -217,6 +300,7 @@ function onGpsError(err) {
 function updateTrackingUI() {
     const btnStart = document.getElementById('btn-track-start');
     const btnStop = document.getElementById('btn-track-stop');
+    const btnRecenter = document.getElementById('btn-recenter');
     const statsEl = document.getElementById('tracking-stats');
 
     if (!btnStart) return;
@@ -224,9 +308,11 @@ function updateTrackingUI() {
     if (tracking.active) {
         btnStart.style.display = 'none';
         btnStop.style.display = '';
+        btnRecenter.style.display = '';
         updateTrackingStats();
     } else {
         btnStop.style.display = 'none';
+        btnRecenter.style.display = 'none';
         btnStart.textContent = '開始掃街';
         statsEl.textContent = '';
         btnStart.style.display = '';
@@ -246,9 +332,18 @@ function updateTrackingStats() {
     const total = tracking.targetCoords.length;
     const remaining = total - touched;
     const pct = total > 0 ? Math.round(touched / total * 100) : 0;
+    let nextInfo = '';
+    if (tracking.nextTargetIdx >= 0) {
+        const distM = Math.round(tracking.nextTargetDist);
+        nextInfo = distM >= 1000
+            ? ` · 下一點 ${(distM / 1000).toFixed(1)} km`
+            : ` · 下一點 ${distM} m`;
+    } else if (remaining === 0 && total > 0) {
+        nextInfo = ' · 全部完成!';
+    }
     statsEl.innerHTML =
         `${km} km / ${min}:${sec.toString().padStart(2, '0')}` +
-        `<br>路線點: ${touched}/${total} (${pct}%) · 剩餘 ${remaining}`;
+        `<br>路線點: ${touched}/${total} (${pct}%) · 剩餘 ${remaining}${nextInfo}`;
 }
 
 function checkTouchPoints(lat, lng, ts) {
@@ -262,7 +357,10 @@ function checkTouchPoints(lat, lng, ts) {
             changed = true;
         }
     }
-    if (changed) drawTouchPoints();
+    if (changed) {
+        drawTouchPoints();
+        updateGuide(lat, lng);
+    }
 }
 
 function drawTouchPoints() {

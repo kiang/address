@@ -107,6 +107,13 @@ updateDashboardButton();
 
 document.getElementById('btn-track-start').addEventListener('click', () => startTracking());
 document.getElementById('btn-track-stop').addEventListener('click', stopTracking);
+document.getElementById('btn-recenter').addEventListener('click', () => {
+    tracking.followUser = true;
+    if (tracking.gpsMarker) {
+        const ll = tracking.gpsMarker.getLatLng();
+        map.setView(ll, Math.max(map.getZoom(), 16), { animate: true });
+    }
+});
 
 function clearMap() {
     if (tracking.active) stopTracking();
