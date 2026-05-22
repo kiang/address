@@ -1,5 +1,6 @@
 const STORAGE_KEY = 'sweep_tracks';
 const MIN_DISTANCE_M = 10;
+const TOUCH_RADIUS_M = 30;
 
 let tracking = {
     active: false,
@@ -11,7 +12,10 @@ let tracking = {
     accuracyCircle: null,
     points: [],
     startTime: null,
-    distanceM: 0
+    distanceM: 0,
+    targetCoords: [],
+    touchedSet: new Set(),
+    touchMarkers: []
 };
 
 function haversineM(lat1, lng1, lat2, lng2) {
@@ -92,6 +96,12 @@ function startTracking(resumeKey) {
         ? tracking.points[tracking.points.length - 1]
         : null;
 
+    const feat = currentData.features[currentSegment];
+    tracking.targetCoords = feat.geometry.coordinates.map(c => ({ lat: c[1], lng: c[0] }));
+    tracking.touchedSet = new Set(existing && existing.touchedPoints ? existing.touchedPoints : []);
+    tracking.touchMarkers = [];
+    drawTouchPoints();
+
     const latlngs = tracking.points.map(p => [p.lat, p.lng]);
     tracking.gpsLine = L.polyline(latlngs, {
         color: '#e67e22', weight: 4, opacity: 0.85, dashArray: '8,6'
@@ -133,10 +143,13 @@ function stopTracking() {
             distanceM: tracking.distanceM,
             city: currentCity,
             code: currentCode,
-            segment: currentSegment
+            segment: currentSegment,
+            touchedPoints: [...tracking.touchedSet],
+            totalRoutePoints: tracking.targetCoords.length
         });
     }
 
+    tracking.touchMarkers.forEach(m => map.removeLayer(m));
     tracking.active = false;
     tracking.sessionKey = null;
     tracking.lastPoint = null;
@@ -146,6 +159,9 @@ function stopTracking() {
     tracking.points = [];
     tracking.startTime = null;
     tracking.distanceM = 0;
+    tracking.targetCoords = [];
+    tracking.touchedSet = new Set();
+    tracking.touchMarkers = [];
 
     updateTrackingUI();
 }
@@ -174,6 +190,8 @@ function onGpsPosition(pos) {
 
     if (tracking.gpsLine) tracking.gpsLine.addLatLng([lat, lng]);
 
+    checkTouchPoints(lat, lng, ts);
+
     if (tracking.points.length % 5 === 0) {
         saveTrack(tracking.sessionKey, {
             startTime: tracking.startTime,
@@ -181,7 +199,9 @@ function onGpsPosition(pos) {
             distanceM: tracking.distanceM,
             city: currentCity,
             code: currentCode,
-            segment: currentSegment
+            segment: currentSegment,
+            touchedPoints: [...tracking.touchedSet],
+            totalRoutePoints: tracking.targetCoords.length
         });
     }
 
@@ -222,7 +242,46 @@ function updateTrackingStats() {
     const elapsed = Math.floor((Date.now() - tracking.startTime) / 1000);
     const min = Math.floor(elapsed / 60);
     const sec = elapsed % 60;
-    statsEl.textContent = `${tracking.points.length} 點 / ${km} km / ${min}:${sec.toString().padStart(2, '0')}`;
+    const touched = tracking.touchedSet.size;
+    const total = tracking.targetCoords.length;
+    const remaining = total - touched;
+    const pct = total > 0 ? Math.round(touched / total * 100) : 0;
+    statsEl.innerHTML =
+        `${km} km / ${min}:${sec.toString().padStart(2, '0')}` +
+        `<br>路線點: ${touched}/${total} (${pct}%) · 剩餘 ${remaining}`;
+}
+
+function checkTouchPoints(lat, lng, ts) {
+    let changed = false;
+    for (let i = 0; i < tracking.targetCoords.length; i++) {
+        if (tracking.touchedSet.has(i)) continue;
+        const tp = tracking.targetCoords[i];
+        const d = haversineM(lat, lng, tp.lat, tp.lng);
+        if (d <= TOUCH_RADIUS_M) {
+            tracking.touchedSet.add(i);
+            changed = true;
+        }
+    }
+    if (changed) drawTouchPoints();
+}
+
+function drawTouchPoints() {
+    tracking.touchMarkers.forEach(m => map.removeLayer(m));
+    tracking.touchMarkers = [];
+
+    for (let i = 0; i < tracking.targetCoords.length; i++) {
+        const tp = tracking.targetCoords[i];
+        const touched = tracking.touchedSet.has(i);
+        const marker = L.circleMarker([tp.lat, tp.lng], {
+            radius: 4,
+            color: touched ? '#2ecc40' : '#ccc',
+            fillColor: touched ? '#2ecc40' : '#eee',
+            fillOpacity: touched ? 0.9 : 0.5,
+            weight: 1
+        }).addTo(map);
+        tracking.touchMarkers.push(marker);
+        segmentLayers.push(marker);
+    }
 }
 
 function drawSavedTracks() {
@@ -260,6 +319,9 @@ function computeTrackAnalytics(t) {
     const avgAcc = pts.length > 0
         ? pts.reduce((sum, p) => sum + (p.acc || 0), 0) / pts.length
         : 0;
+    const touchedCount = t.touchedPoints ? t.touchedPoints.length : 0;
+    const totalRoute = t.totalRoutePoints || 0;
+    const touchPct = totalRoute > 0 ? Math.round(touchedCount / totalRoute * 100) : 0;
     return {
         pointCount: pts.length,
         distKm,
@@ -268,12 +330,17 @@ function computeTrackAnalytics(t) {
         avgSpeedKmh: +avgSpeedKmh.toFixed(1),
         avgAccM: +avgAcc.toFixed(1),
         startTime: t.startTime || (pts.length > 0 ? pts[0].ts : 0),
-        endTime: pts.length > 0 ? pts[pts.length - 1].ts : 0
+        endTime: pts.length > 0 ? pts[pts.length - 1].ts : 0,
+        touchedCount,
+        totalRoutePoints: totalRoute,
+        remainingPoints: totalRoute - touchedCount,
+        touchPct
     };
 }
 
 function computeSummary(tracks) {
     let totalDist = 0, totalDuration = 0, totalPoints = 0, trackCount = 0;
+    let totalTouched = 0, totalRoutePoints = 0;
     const cities = new Set();
     const districts = new Set();
     for (const key in tracks) {
@@ -282,10 +349,13 @@ function computeSummary(tracks) {
         totalDist += a.distKm;
         totalDuration += a.durationMs;
         totalPoints += a.pointCount;
+        totalTouched += a.touchedCount;
+        totalRoutePoints += a.totalRoutePoints;
         trackCount++;
         if (t.city) cities.add(t.city);
         if (t.code) districts.add(t.code);
     }
+    const totalTouchPct = totalRoutePoints > 0 ? Math.round(totalTouched / totalRoutePoints * 100) : 0;
     return {
         trackCount,
         totalDistKm: +totalDist.toFixed(2),
@@ -293,7 +363,10 @@ function computeSummary(tracks) {
         totalDurationMs: totalDuration,
         totalPoints,
         cityCount: cities.size,
-        districtCount: districts.size
+        districtCount: districts.size,
+        totalTouched,
+        totalRoutePoints,
+        totalTouchPct
     };
 }
 
@@ -325,6 +398,9 @@ function renderDashboardList() {
     summaryEl.className = 'dashboard-summary';
     summaryEl.innerHTML =
         `<div class="summary-title">總計</div>` +
+        (summary.totalRoutePoints > 0
+            ? `<div class="track-progress summary-progress"><div class="progress-bar"><div class="progress-fill" style="width:${summary.totalTouchPct}%"></div></div><span class="progress-text">路線覆蓋 ${summary.totalTouched}/${summary.totalRoutePoints} 點 (${summary.totalTouchPct}%)</span></div>`
+            : '') +
         `<div class="summary-grid">` +
             `<div class="summary-stat"><span class="summary-value">${summary.trackCount}</span><span class="summary-label">筆紀錄</span></div>` +
             `<div class="summary-stat"><span class="summary-value">${summary.totalDistKm}</span><span class="summary-label">公里</span></div>` +
@@ -357,6 +433,9 @@ function renderDashboardList() {
                 `<button class="track-item-toggle">&#x25BC;</button>` +
             `</div>` +
             `<div class="track-item-details" style="display:none">` +
+                (a.totalRoutePoints > 0
+                    ? `<div class="track-progress"><div class="progress-bar"><div class="progress-fill" style="width:${a.touchPct}%"></div></div><span class="progress-text">${a.touchedCount}/${a.totalRoutePoints} 點 (${a.touchPct}%) · 剩餘 ${a.remainingPoints}</span></div>`
+                    : '') +
                 `<div class="track-details-grid">` +
                     `<div class="detail-cell"><span class="detail-value">${a.distKm.toFixed(2)}</span><span class="detail-label">公里</span></div>` +
                     `<div class="detail-cell"><span class="detail-value">${a.durationStr}</span><span class="detail-label">時間</span></div>` +
