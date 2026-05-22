@@ -133,6 +133,9 @@ async function loadDistrict(cityKey, code) {
         if (header) header.querySelector('.toggle').textContent = '▼';
     }
 
+    panel.classList.add('collapsed');
+    document.getElementById('panel-toggle').textContent = '▶';
+
     clearMap();
     currentCity = cityKey;
     currentCode = code;
