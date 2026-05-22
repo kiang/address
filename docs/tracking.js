@@ -330,6 +330,17 @@ function onGpsError(err) {
     if (statsEl) statsEl.textContent = 'GPS 訊號取得失敗，請確認定位權限';
 }
 
+function positionTrackingBar() {
+    const bar = document.getElementById('tracking-bar');
+    const segNavEl = document.getElementById('segment-nav');
+    if (!bar || !segNavEl) return;
+    if (segNavEl.style.display === 'none' || segNavEl.offsetHeight === 0) {
+        bar.style.bottom = '16px';
+    } else {
+        bar.style.bottom = (segNavEl.offsetHeight + 24) + 'px';
+    }
+}
+
 function updateTrackingUI() {
     const btnStart = document.getElementById('btn-track-start');
     const btnStop = document.getElementById('btn-track-stop');
@@ -355,6 +366,7 @@ function updateTrackingUI() {
         if (segNavEl) segNavEl.style.display = 'flex';
     }
 
+    positionTrackingBar();
     updateDashboardButton();
 }
 
