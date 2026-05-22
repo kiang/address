@@ -23,6 +23,37 @@ let tracking = {
     followUser: true
 };
 
+let wakeLock = null;
+
+async function requestWakeLock() {
+    if (!('wakeLock' in navigator)) return;
+    try {
+        wakeLock = await navigator.wakeLock.request('screen');
+        wakeLock.addEventListener('release', () => { wakeLock = null; });
+    } catch (e) { /* user denied or not supported */ }
+}
+
+function releaseWakeLock() {
+    if (wakeLock) {
+        wakeLock.release();
+        wakeLock = null;
+    }
+}
+
+document.addEventListener('visibilitychange', () => {
+    if (!tracking.active) return;
+    if (document.visibilityState === 'visible') {
+        requestWakeLock();
+        if (tracking.watchId === null) {
+            tracking.watchId = navigator.geolocation.watchPosition(
+                onGpsPosition,
+                onGpsError,
+                { enableHighAccuracy: true, maximumAge: 3000, timeout: 10000 }
+            );
+        }
+    }
+});
+
 function haversineM(lat1, lng1, lat2, lng2) {
     const R = 6371000;
     const dLat = (lat2 - lat1) * Math.PI / 180;
@@ -184,6 +215,7 @@ function startTracking(resumeKey) {
         { enableHighAccuracy: true, maximumAge: 3000, timeout: 10000 }
     );
 
+    requestWakeLock();
     map.on('dragstart', onUserDrag);
 
     updateTrackingUI();
@@ -217,6 +249,7 @@ function stopTracking() {
     tracking.touchMarkers.forEach(m => map.removeLayer(m));
     if (tracking.guideLine) { map.removeLayer(tracking.guideLine); }
     if (tracking.guideTarget) { map.removeLayer(tracking.guideTarget); }
+    releaseWakeLock();
     map.off('dragstart', onUserDrag);
 
     tracking.active = false;
