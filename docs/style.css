@@ -78,6 +78,28 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
 #segment-nav button:hover { background: #3a7bc8; }
 #segment-nav button:disabled { background: #ccc; cursor: default; }
 #segment-info { min-width: 100px; text-align: center; font-size: 14px; }
+#btn-export-route { background: #8e44ad; padding: 10px 12px; font-size: 16px; }
+#btn-export-route:hover { background: #7d3c98; }
+
+/* Export menu */
+#export-menu {
+    position: absolute; bottom: 80px; left: 50%; transform: translateX(-50%);
+    z-index: 1001; background: white; border-radius: 10px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.25); padding: 12px 14px;
+    display: flex; flex-direction: column; gap: 8px; min-width: 200px;
+}
+.export-menu-title {
+    font-size: 14px; font-weight: 600; text-align: center;
+    padding-bottom: 6px; border-bottom: 1px solid #e0e0e0;
+}
+#export-menu button {
+    border: none; border-radius: 6px; padding: 10px 16px;
+    cursor: pointer; font-size: 15px; min-height: 44px; width: 100%;
+}
+#export-menu .export-opt { background: #4a90d9; color: white; }
+#export-menu .export-opt:hover { background: #3a7bc8; }
+#export-menu .export-cancel { background: #eee; color: #555; }
+#export-menu .export-cancel:hover { background: #ddd; }
 
 /* Tracking bar */
 #tracking-bar {

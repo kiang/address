@@ -610,7 +610,7 @@ function renderDashboardList() {
         });
 
         item.querySelector('.track-btn-export').addEventListener('click', () => {
-            exportTrack(key);
+            showExportMenu(`匯出紀錄 - ${cityLabel} ${distLabel}`, (fmt) => exportTrack(key, fmt));
         });
 
         item.querySelector('.track-btn-delete').addEventListener('click', () => {
@@ -639,32 +639,127 @@ function updateDashboardButton() {
     }
 }
 
-function exportTrack(key) {
+function coordsToKML(coords, name, description) {
+    const coordStr = coords.map(c => `${c[0]},${c[1]},0`).join('\n            ');
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <name>${escapeXml(name)}</name>
+    <description>${escapeXml(description)}</description>
+    <Style id="line"><LineStyle><color>ff0000ff</color><width>3</width></LineStyle></Style>
+    <Placemark>
+      <name>${escapeXml(name)}</name>
+      <styleUrl>#line</styleUrl>
+      <LineString>
+        <coordinates>
+            ${coordStr}
+        </coordinates>
+      </LineString>
+    </Placemark>
+  </Document>
+</kml>`;
+}
+
+function escapeXml(str) {
+    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function downloadFile(content, filename, mimeType) {
+    const blob = new Blob([content], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+}
+
+function exportTrack(key, format) {
     const tracks = getAllTracks();
     const track = tracks[key];
     if (!track) return;
 
-    const features = [{
-        type: 'Feature',
-        properties: {
-            city: track.city,
-            district: track.code,
-            segment: track.segment + 1,
-            distanceKm: +(track.distanceM / 1000).toFixed(2),
-            startTime: new Date(track.startTime).toISOString(),
-            pointCount: track.points.length
-        },
-        geometry: {
-            type: 'LineString',
-            coordinates: track.points.map(p => [p.lng, p.lat])
-        }
-    }];
-    const geojson = { type: 'FeatureCollection', features };
-    const blob = new Blob([JSON.stringify(geojson, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `track_${key.replace(/\//g, '_')}.geojson`;
-    a.click();
-    URL.revokeObjectURL(url);
+    const cityLabel = cityNames[track.city] || track.city;
+    const distLabel = districtNames[track.code] || track.code;
+    const name = `${cityLabel} ${distLabel} 第 ${track.segment + 1} 段 掃街紀錄`;
+    const coords = track.points.map(p => [p.lng, p.lat]);
+    const fileBase = `track_${key.replace(/\//g, '_')}`;
+
+    if (format === 'kml') {
+        const desc = `距離: ${(track.distanceM / 1000).toFixed(2)} km, GPS點: ${track.points.length}`;
+        const kml = coordsToKML(coords, name, desc);
+        downloadFile(kml, `${fileBase}.kml`, 'application/vnd.google-earth.kml+xml');
+    } else {
+        const geojson = {
+            type: 'FeatureCollection',
+            features: [{
+                type: 'Feature',
+                properties: {
+                    name,
+                    city: track.city,
+                    district: track.code,
+                    segment: track.segment + 1,
+                    distanceKm: +(track.distanceM / 1000).toFixed(2),
+                    startTime: new Date(track.startTime).toISOString(),
+                    pointCount: track.points.length
+                },
+                geometry: { type: 'LineString', coordinates: coords }
+            }]
+        };
+        downloadFile(JSON.stringify(geojson, null, 2), `${fileBase}.geojson`, 'application/json');
+    }
 }
+
+function exportRoute(format) {
+    if (!currentData || !currentCity) return;
+    const feat = currentData.features[currentSegment];
+    const cityLabel = cityNames[currentCity] || currentCity;
+    const distLabel = districtNames[currentCode] || currentCode;
+    const name = `${cityLabel} ${distLabel} 第 ${currentSegment + 1} 段 路線`;
+    const coords = feat.geometry.coordinates.map(c => [c[0], c[1]]);
+    const fileBase = `route_${currentCity}_${currentCode}_${currentSegment + 1}`;
+
+    if (format === 'kml') {
+        const desc = `${feat.properties.km} km`;
+        const kml = coordsToKML(coords, name, desc);
+        downloadFile(kml, `${fileBase}.kml`, 'application/vnd.google-earth.kml+xml');
+    } else {
+        const geojson = {
+            type: 'FeatureCollection',
+            features: [{
+                type: 'Feature',
+                properties: {
+                    name,
+                    city: currentCity,
+                    district: currentCode,
+                    segment: currentSegment + 1,
+                    km: feat.properties.km
+                },
+                geometry: feat.geometry
+            }]
+        };
+        downloadFile(JSON.stringify(geojson, null, 2), `${fileBase}.geojson`, 'application/json');
+    }
+}
+
+let pendingExportAction = null;
+
+function showExportMenu(title, action) {
+    pendingExportAction = action;
+    const menu = document.getElementById('export-menu');
+    menu.querySelector('.export-menu-title').textContent = title;
+    menu.style.display = 'flex';
+}
+
+function hideExportMenu() {
+    document.getElementById('export-menu').style.display = 'none';
+    pendingExportAction = null;
+}
+
+document.querySelectorAll('#export-menu .export-opt').forEach(btn => {
+    btn.addEventListener('click', () => {
+        if (pendingExportAction) pendingExportAction(btn.dataset.format);
+        hideExportMenu();
+    });
+});
+document.querySelector('#export-menu .export-cancel').addEventListener('click', hideExportMenu);

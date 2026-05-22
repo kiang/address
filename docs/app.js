@@ -105,6 +105,13 @@ document.getElementById('dashboard-modal').addEventListener('click', (e) => {
 });
 updateDashboardButton();
 
+document.getElementById('btn-export-route').addEventListener('click', () => {
+    if (!currentData) return;
+    const cityLabel = currentCity ? cityNames[currentCity] : '';
+    const distLabel = districtNames[currentCode] || currentCode;
+    showExportMenu(`匯出路線 - ${cityLabel} ${distLabel}`, (fmt) => exportRoute(fmt));
+});
+
 document.getElementById('btn-track-start').addEventListener('click', () => startTracking());
 document.getElementById('btn-track-stop').addEventListener('click', stopTracking);
 document.getElementById('btn-recenter').addEventListener('click', () => {
