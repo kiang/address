@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 """
-Read all raw/*.csv and raw/*.xlsx files, normalise varying column names,
-deduplicate at 號, group by 鄉鎮市區代碼, solve nearest-neighbor TSP per
-district using KDTree, output one GeoJSON per district into output/<city>/.
+Read normalized data/<city>/<district>.csv files, deduplicate at 號,
+cluster points by village (村里), order villages by nearest-neighbor +
+2-opt over centroids, then solve nearest-neighbor TSP within each village
+so every village is covered by one contiguous stretch of the route.
+Output one GeoJSON per district into docs/output/<city>/.
 Coordinates are TWD97 (EPSG:3826) and converted to WGS84 (EPSG:4326).
+
+Usage: generate_all.py [city ...]   (default: all cities under data/)
 """
 
 import csv
@@ -17,127 +21,6 @@ import time
 import numpy as np
 from collections import defaultdict
 from scipy.spatial import KDTree
-
-
-COLUMN_MAP = {
-    "鄉鎮市區代碼": "district",
-    "areacode": "district",
-    " districtCode": "district",
-    "districtCode": "district",
-
-    "街、路段": "street",
-    "街路段": "street",
-    "街或路段": "street",
-    "街_路段": "street",
-    "street、road、section": "street",
-    " streetRoadSection": "street",
-    "streetRoadSection": "street",
-    "街（路段）": "street",
-
-    "地區": "area",
-    " area": "area",
-
-    "巷": "lane",
-    " lane": "lane",
-
-    "弄": "alley",
-    " alley": "alley",
-
-    "號": "number",
-    "號樓": "number",
-    "number": "number",
-    " houseNumber": "number",
-    "houseNumber": "number",
-
-    "地址": "address",
-
-    "橫座標": "x",
-    "橫坐標": "x",
-    "TWD97橫坐標": "x",
-    "x_3826": "x",
-    " coordinateX": "x",
-    "coordinateX": "x",
-
-    "縱座標": "y",
-    "縱坐標": "y",
-    "TWD97縱坐標": "y",
-    "y_3826": "y",
-    " coordinateY": "y",
-    "coordinateY": "y",
-}
-
-
-def normalise_row(header_map, raw_row):
-    mapped = {}
-    for orig_col, value in raw_row.items():
-        key = header_map.get(orig_col)
-        if key:
-            mapped[key] = (value or "").strip() if isinstance(value, str) else value
-    return mapped
-
-
-def build_header_map(columns):
-    hmap = {}
-    for col in columns:
-        norm = COLUMN_MAP.get(col)
-        if not norm:
-            norm = COLUMN_MAP.get(col.strip())
-        if norm:
-            hmap[col] = norm
-    return hmap
-
-
-def read_csv(path):
-    for enc in ("utf-8-sig", "big5", "cp950"):
-        try:
-            with open(path, encoding=enc) as f:
-                reader = csv.DictReader(f)
-                header_map = build_header_map(reader.fieldnames)
-                if "district" not in header_map.values():
-                    continue
-                if "x" not in header_map.values() or "y" not in header_map.values():
-                    continue
-                rows = []
-                for raw in reader:
-                    rows.append(normalise_row(header_map, raw))
-                return rows
-        except (UnicodeDecodeError, UnicodeError):
-            continue
-    # Retry with errors='replace' for files with mixed/corrupt encoding
-    for enc in ("big5", "cp950", "utf-8"):
-        try:
-            with open(path, encoding=enc, errors="replace") as f:
-                reader = csv.DictReader(f)
-                header_map = build_header_map(reader.fieldnames)
-                if "district" not in header_map.values():
-                    continue
-                if "x" not in header_map.values() or "y" not in header_map.values():
-                    continue
-                rows = []
-                for raw in reader:
-                    rows.append(normalise_row(header_map, raw))
-                return rows
-        except Exception:
-            continue
-    return None
-
-
-def read_xlsx(path):
-    import openpyxl
-    wb = openpyxl.load_workbook(path, read_only=True)
-    ws = wb.active
-    rows_iter = ws.iter_rows(values_only=True)
-    header = [str(h) if h is not None else "" for h in next(rows_iter)]
-    header_map = build_header_map(header)
-    if "district" not in header_map.values():
-        wb.close()
-        return None
-    rows = []
-    for raw_values in rows_iter:
-        raw_row = dict(zip(header, raw_values))
-        rows.append(normalise_row(header_map, raw_row))
-    wb.close()
-    return rows
 
 
 def twd97_to_wgs84(x, y):
@@ -184,22 +67,22 @@ def twd97_to_wgs84(x, y):
     return np.degrees(lat), np.degrees(lng)
 
 
-def nearest_neighbor_tsp_kdtree(xy):
+def nearest_neighbor_route(xy, start=0):
     n = len(xy)
     if n <= 1:
         return list(range(n))
 
     tree = KDTree(xy)
     visited = np.zeros(n, dtype=bool)
-    order = [0]
-    visited[0] = True
-    current = 0
+    order = [start]
+    visited[start] = True
+    current = start
 
     for step in range(n - 1):
         k = min(32, n - step)
         dists, idxs = tree.query(xy[current], k=k)
         found = False
-        for d, j in zip(dists, idxs):
+        for d, j in zip(np.atleast_1d(dists), np.atleast_1d(idxs)):
             if not visited[j]:
                 visited[j] = True
                 order.append(j)
@@ -215,6 +98,30 @@ def nearest_neighbor_tsp_kdtree(xy):
             order.append(best)
             current = best
 
+    return order
+
+
+def two_opt(xy, order, max_passes=10):
+    """2-opt improvement for small tours (village centroids)."""
+    n = len(order)
+    if n < 4:
+        return order
+    order = list(order)
+    pts = xy[order]
+    for _ in range(max_passes):
+        improved = False
+        for i in range(n - 2):
+            for j in range(i + 2, n - 1):
+                a, b = pts[i], pts[i + 1]
+                c, d = pts[j], pts[j + 1]
+                before = np.hypot(*(a - b)) + np.hypot(*(c - d))
+                after = np.hypot(*(a - c)) + np.hypot(*(b - d))
+                if after < before - 1e-9:
+                    pts[i + 1:j + 1] = pts[i + 1:j + 1][::-1]
+                    order[i + 1:j + 1] = order[i + 1:j + 1][::-1]
+                    improved = True
+        if not improved:
+            break
     return order
 
 
@@ -259,27 +166,8 @@ def douglas_peucker(coords, epsilon):
     return [coords[i] for i in range(n) if keep[i]]
 
 
-def extract_address(row):
-    if "address" in row and row["address"]:
-        return row["address"]
-    addr = ""
-    if row.get("street"):
-        addr += str(row["street"])
-    if row.get("area"):
-        addr += str(row["area"])
-    if row.get("lane"):
-        v = str(row["lane"])
-        addr += v if "巷" in v else v + "巷"
-    if row.get("alley"):
-        v = str(row["alley"])
-        addr += v if "弄" in v else v + "弄"
-    if row.get("number"):
-        addr += str(row["number"])
-    return addr
-
-
 def extract_dedup_key(row):
-    if "address" in row and row["address"]:
+    if row.get("address"):
         addr = row["address"]
         m = re.search(r"號", addr)
         return addr[:m.end()] if m else addr
@@ -295,139 +183,182 @@ def extract_dedup_key(row):
     )
 
 
-def process_rows(rows, city_name, output_base):
-    districts = defaultdict(dict)
+def haversine_km(c1, c2):
+    dlat = math.radians(c2[1] - c1[1])
+    dlon = math.radians(c2[0] - c1[0])
+    a = math.sin(dlat / 2) ** 2 + math.cos(math.radians(c1[1])) * math.cos(math.radians(c2[1])) * math.sin(dlon / 2) ** 2
+    return 6371 * 2 * math.asin(math.sqrt(a))
 
-    for row in rows:
-        dist = row.get("district")
-        if not dist:
-            continue
-        dist = str(dist).strip()
-        if not dist:
-            continue
 
-        try:
-            x = float(row["x"])
-            y = float(row["y"])
-        except (ValueError, TypeError, KeyError):
-            continue
+SPEED_KMH = 15
+MAX_KM = SPEED_KMH * 1
+# Cut at a village boundary once a segment reaches this fraction of MAX_KM,
+# so segments align with villages instead of splitting them.
+SOFT_CUT_RATIO = 0.6
+DP_EPSILON = 0.00005
 
-        key = extract_dedup_key(row)
-        if key not in districts[dist]:
-            addr = extract_address(row)
-            districts[dist][key] = (x, y, addr)
 
-    if not districts:
-        print(f"  WARNING: no valid data found for {city_name}")
+def process_district(csv_path, city_name, output_base):
+    dist = os.path.splitext(os.path.basename(csv_path))[0]
+
+    points = {}
+    with open(csv_path, encoding="utf-8-sig") as f:
+        for row in csv.DictReader(f):
+            try:
+                x = float(row["x"])
+                y = float(row["y"])
+            except (ValueError, TypeError, KeyError):
+                continue
+            key = extract_dedup_key(row)
+            if key not in points:
+                points[key] = (x, y, (row.get("village") or "").strip())
+
+    n = len(points)
+    if n == 0:
+        print(f"  WARNING: no valid data in {csv_path}")
         return
+    t0 = time.time()
+    print(f"  {dist}: {n} points...", end=" ", flush=True)
 
+    xy = np.array([(p[0], p[1]) for p in points.values()])
+    villages = [p[2] for p in points.values()]
+
+    # Group point indices by village; attach unlabeled points to the
+    # village of their nearest labeled neighbor.
+    groups = defaultdict(list)
+    for i, v in enumerate(villages):
+        groups[v].append(i)
+    if "" in groups and len(groups) > 1:
+        blanks = groups.pop("")
+        labeled = [i for i in range(n) if villages[i]]
+        tree = KDTree(xy[labeled])
+        for i in blanks:
+            _, j = tree.query(xy[i])
+            groups[villages[labeled[j]]].append(i)
+
+    # Order villages by NN + 2-opt over centroids.
+    names = sorted(groups)
+    centroids = np.array([xy[groups[v]].mean(axis=0) for v in names])
+    v_order = nearest_neighbor_route(centroids)
+    v_order = two_opt(centroids, v_order)
+
+    # Route within each village, starting nearest to the previous endpoint.
+    full_order = []
+    chunk_sizes = []
+    chunk_names = []
+    prev_end = None
+    for vi in v_order:
+        idxs = groups[names[vi]]
+        sub_xy = xy[idxs]
+        if prev_end is None:
+            start = 0
+        else:
+            deltas = sub_xy - prev_end
+            start = int(np.argmin((deltas ** 2).sum(axis=1)))
+        sub_order = nearest_neighbor_route(sub_xy, start)
+        full_order.extend(idxs[k] for k in sub_order)
+        chunk_sizes.append(len(sub_order))
+        chunk_names.append(names[vi])
+        prev_end = sub_xy[sub_order[-1]]
+
+    lats, lngs = twd97_to_wgs84(xy[full_order, 0], xy[full_order, 1])
+
+    # Simplify per village so boundaries survive for segment cutting.
+    n_before = len(full_order)
+    chunks = []
+    pos = 0
+    for size, vname in zip(chunk_sizes, chunk_names):
+        coords = [
+            [round(float(lngs[i]), 6), round(float(lats[i]), 6)]
+            for i in range(pos, pos + size)
+        ]
+        pos += size
+        chunks.append((vname, douglas_peucker(coords, DP_EPSILON)))
+    n_after = sum(len(c) for _, c in chunks)
+
+    # Split into segments, preferring cuts at village boundaries.
+    segments = []
+    seg_kms = []
+    seg_villages = []
+
+    def close_segment(coords, km, vnames):
+        if len(coords) >= 2:
+            segments.append(coords)
+            seg_kms.append(round(km, 2))
+            seg_villages.append(vnames)
+
+    seg_coords = []
+    seg_km = 0.0
+    seg_vnames = []
+    for vname, coords in chunks:
+        if seg_coords and seg_km >= MAX_KM * SOFT_CUT_RATIO:
+            close_segment(seg_coords, seg_km, seg_vnames)
+            seg_coords = []
+            seg_km = 0.0
+            seg_vnames = []
+        if not seg_vnames or seg_vnames[-1] != vname:
+            seg_vnames = seg_vnames + [vname]
+        for c in coords:
+            if not seg_coords:
+                seg_coords.append(c)
+                continue
+            d = haversine_km(seg_coords[-1], c)
+            if seg_km + d > MAX_KM and len(seg_coords) >= 2:
+                close_segment(seg_coords, seg_km, seg_vnames)
+                seg_coords = [c]
+                seg_km = 0.0
+                seg_vnames = [vname]
+            else:
+                seg_coords.append(c)
+                seg_km += d
+    close_segment(seg_coords, seg_km, seg_vnames)
+
+    features = []
+    for si, seg in enumerate(segments):
+        features.append({
+            "type": "Feature",
+            "properties": {
+                "district": dist,
+                "segment": si + 1,
+                "total_segments": len(segments),
+                "km": seg_kms[si],
+                "villages": seg_villages[si],
+            },
+            "geometry": {"type": "LineString", "coordinates": seg},
+        })
+
+    geojson = {"type": "FeatureCollection", "features": features}
     out_dir = os.path.join(output_base, city_name)
     os.makedirs(out_dir, exist_ok=True)
-
-    total_districts = len(districts)
-    for idx, (dist, points_dict) in enumerate(sorted(districts.items()), 1):
-        points = list(points_dict.values())
-        n = len(points)
-        t0 = time.time()
-        print(f"  [{idx}/{total_districts}] District {dist}: {n} points...", end=" ", flush=True)
-
-        xs = [p[0] for p in points]
-        ys = [p[1] for p in points]
-
-        xy = np.column_stack([xs, ys])
-        order = nearest_neighbor_tsp_kdtree(xy)
-
-        xs_arr = np.array(xs)
-        ys_arr = np.array(ys)
-        lats, lngs = twd97_to_wgs84(xs_arr, ys_arr)
-
-        ordered_coords = []
-        for oi in order:
-            lng_r = round(float(lngs[oi]), 6)
-            lat_r = round(float(lats[oi]), 6)
-            ordered_coords.append([lng_r, lat_r])
-
-        n_before = len(ordered_coords)
-        ordered_coords = douglas_peucker(ordered_coords, 0.00005)
-        n_after = len(ordered_coords)
-
-        SPEED_KMH = 15
-        MAX_KM = SPEED_KMH * 1
-        segments = []
-        seg_coords = [ordered_coords[0]]
-        seg_km = 0.0
-        seg_kms = []
-        for i in range(1, len(ordered_coords)):
-            c1 = ordered_coords[i - 1]
-            c2 = ordered_coords[i]
-            dlat = math.radians(c2[1] - c1[1])
-            dlon = math.radians(c2[0] - c1[0])
-            a = math.sin(dlat / 2) ** 2 + math.cos(math.radians(c1[1])) * math.cos(math.radians(c2[1])) * math.sin(dlon / 2) ** 2
-            d = 6371 * 2 * math.asin(math.sqrt(a))
-            if seg_km + d > MAX_KM and len(seg_coords) >= 2:
-                segments.append(seg_coords)
-                seg_kms.append(round(seg_km, 2))
-                seg_coords = [c2]
-                seg_km = 0.0
-            else:
-                seg_coords.append(c2)
-                seg_km += d
-        if len(seg_coords) >= 2:
-            segments.append(seg_coords)
-            seg_kms.append(round(seg_km, 2))
-
-        features = []
-        for si, seg in enumerate(segments):
-            features.append({
-                "type": "Feature",
-                "properties": {
-                    "district": dist,
-                    "segment": si + 1,
-                    "total_segments": len(segments),
-                    "km": seg_kms[si],
-                },
-                "geometry": {"type": "LineString", "coordinates": seg},
-            })
-
-        geojson = {"type": "FeatureCollection", "features": features}
-        outpath = os.path.join(out_dir, f"{dist}.geojson")
-        with open(outpath, "w", encoding="utf-8") as f:
-            json.dump(geojson, f, ensure_ascii=False)
-        elapsed = time.time() - t0
-        print(f"{len(segments)} segments, {n_before}->{n_after} pts ({100*n_after/n_before:.0f}%), {elapsed:.1f}s", flush=True)
+    outpath = os.path.join(out_dir, f"{dist}.geojson")
+    with open(outpath, "w", encoding="utf-8") as f:
+        json.dump(geojson, f, ensure_ascii=False)
+    elapsed = time.time() - t0
+    print(
+        f"{len(groups)} villages, {len(segments)} segments, "
+        f"{n_before}->{n_after} pts ({100*n_after/n_before:.0f}%), {elapsed:.1f}s",
+        flush=True,
+    )
 
 
 def main():
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     output_base = os.path.join(base_dir, "docs", "output")
-    raw_dir = os.path.join(base_dir, "raw")
+    data_dir = os.path.join(base_dir, "data")
     os.makedirs(output_base, exist_ok=True)
 
-    raw_files = sorted(glob.glob(os.path.join(raw_dir, "*.csv"))) + sorted(glob.glob(os.path.join(raw_dir, "*.xlsx")))
+    cities = sorted(
+        d for d in os.listdir(data_dir)
+        if os.path.isdir(os.path.join(data_dir, d))
+    )
+    if len(sys.argv) > 1:
+        cities = [c for c in cities if c in sys.argv[1:]]
 
-    city_groups = defaultdict(list)
-    for fpath in raw_files:
-        basename = os.path.splitext(os.path.basename(fpath))[0]
-        city = re.sub(r"_\d+$", "", basename)
-        city_groups[city].append(fpath)
-
-    for city, files in sorted(city_groups.items()):
-        print(f"\n=== {city} ({len(files)} file(s)) ===")
-        all_rows = []
+    for city in cities:
+        files = sorted(glob.glob(os.path.join(data_dir, city, "*.csv")))
+        print(f"\n=== {city} ({len(files)} district(s)) ===")
         for fpath in files:
-            print(f"  Reading {fpath}...")
-            if fpath.endswith(".csv"):
-                rows = read_csv(fpath)
-            else:
-                rows = read_xlsx(fpath)
-            if rows is None:
-                print(f"  SKIPPED (no valid address columns found)")
-                continue
-            print(f"  -> {len(rows)} rows")
-            all_rows.extend(rows)
-
-        if all_rows:
-            process_rows(all_rows, city, output_base)
+            process_district(fpath, city, output_base)
 
     print("\nDone.")
 

@@ -78,6 +78,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
 #segment-nav button:hover { background: #3a7bc8; }
 #segment-nav button:disabled { background: #ccc; cursor: default; }
 #segment-info { min-width: 100px; text-align: center; font-size: 14px; }
+#segment-info .seg-villages { font-size: 12px; color: #555; }
 #btn-export-route { background: #8e44ad; padding: 10px 12px; font-size: 16px; }
 #btn-export-route:hover { background: #7d3c98; }
 

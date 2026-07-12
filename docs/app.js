@@ -269,7 +269,9 @@ function showSegment(idx) {
 
     const distName = districtNames[feat.properties.district] || feat.properties.district;
     const cityLabel = currentCity ? cityNames[currentCity] : '';
-    segInfo.innerHTML = `<strong>${cityLabel} ${distName}</strong><br>第 ${idx + 1} / ${total} 段 (${feat.properties.km} km)`;
+    const villages = feat.properties.villages || [];
+    const villageLabel = villages.length ? `<br><span class="seg-villages">${villages.join('、')}</span>` : '';
+    segInfo.innerHTML = `<strong>${cityLabel} ${distName}</strong><br>第 ${idx + 1} / ${total} 段 (${feat.properties.km} km)${villageLabel}`;
 
     btnPrev.disabled = idx === 0;
     btnNext.disabled = idx === total - 1;
